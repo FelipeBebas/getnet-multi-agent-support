@@ -201,7 +201,7 @@ class GetnetHybridEmbeddingFunction(EmbeddingFunction[Documents]):
 
 
 class OpenAIChromaEmbeddingFunction(EmbeddingFunction[Documents]):
-    """ChromaDB EmbeddingFunction backed by OpenAIEmbeddings (text-embedding-3-small)."""
+    """ChromaDB EmbeddingFunction backed by OpenAIEmbeddings (text-embedding-3-small) with resilient fallback."""
 
     def __init__(
         self,
@@ -212,10 +212,11 @@ class OpenAIChromaEmbeddingFunction(EmbeddingFunction[Documents]):
         self._client = OpenAIEmbeddings(
             model=self.model,
             api_key=api_key or settings.openai_api_key,
-            timeout=6.0,
-            max_retries=1,
+            timeout=12.0,
+            max_retries=2,
             check_embedding_ctx_length=False,
         )
+        self._fallback_fn = GetnetHybridEmbeddingFunction(dim=1536)
 
     @staticmethod
     def name() -> str:
@@ -232,7 +233,14 @@ class OpenAIChromaEmbeddingFunction(EmbeddingFunction[Documents]):
         texts = [str(doc) for doc in input]
         if not texts:
             return []
-        return self._client.embed_documents(texts)
+        try:
+            return self._client.embed_documents(texts)
+        except Exception as exc:
+            logger.warning(
+                "openai_embedding_call_failed_falling_back_to_hybrid",
+                error=str(exc),
+            )
+            return self._fallback_fn(input)
 
 
 class RetrievedChunk(BaseModel):
