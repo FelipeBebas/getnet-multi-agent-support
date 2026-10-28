@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "getnet-multi-agent-support"
+version = "1.0.0"
+description = "Getnet Multi-Agent Customer & Knowledge Support System (Spec-Driven Development)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "langgraph>=0.2.35",
+    "langchain-core>=0.3.10",
+    "langchain-openai>=0.2.2",
+    "langsmith>=0.1.130",
+    "chromadb>=0.5.15",
+    "httpx>=0.27.2",
+    "beautifulsoup4>=4.12.3",
+    "duckduckgo-search>=6.3.0",
+    "structlog>=24.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+pythonpath = ["."]

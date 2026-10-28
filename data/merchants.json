@@ -1,0 +1,120 @@
+{
+  "merchants": {
+    "cliente1988": {
+      "user_id": "cliente1988",
+      "merchant_name": "Padaria & Café Bela Vista Ltda",
+      "document_masked": "12.345.678/0001-90",
+      "city": "Porto Alegre, RS",
+      "account_status": "ACTIVE",
+      "settlement_plan": "Plano Receba Já D+1 (Automatic 1-Business-Day Settlement)",
+      "settlement": {
+        "yesterday_sales_gross_brl": 4850.00,
+        "yesterday_sales_net_brl": 4712.25,
+        "yesterday_transactions_count": 64,
+        "deposit_status": "SCHEDULED_FOR_TODAY",
+        "expected_deposit_date": "Today (next business day D+1 settlement cycle)",
+        "expected_deposit_window": "Between 09:00 and 14:30 BRT",
+        "payout_method": "Automatic Bank Transfer (Domicílio Bancário / STR)",
+        "bank_account": {
+          "bank_name": "Banco Santander (Brasil) S.A. (033)",
+          "branch": "3421",
+          "account_masked": "***4589-2",
+          "account_type": "Checking Account (Domicílio Bancário Ativo)"
+        },
+        "upcoming_receivables_30d_brl": 18420.50,
+        "notes": "Yesterday's batch #BATCH-1988-YD (R$ 4,712.25 net from R$ 4,850.00 gross across 64 sales) has been cleared and is scheduled for deposit today between 09:00 and 14:30 BRT into your registered Santander account (branch 3421, account ***4589-2)."
+      },
+      "pos_terminal": {
+        "terminal_id": "POS-GN-884120",
+        "model": "Get Smart (Android Smart POS - Wi-Fi + 4G)",
+        "serial_number": "SN-GSMART-9920188",
+        "firmware_version": "v4.12.8-getnet",
+        "connectivity": {
+          "current_status": "OFFLINE_HANDSHAKE_TIMEOUT",
+          "wifi_status": "Disconnected (Stored network 'BelaVista_5G' timed out — 5GHz band interference detected)",
+          "sim_4g_status": "Vivo 4G Multi-Operator SIM active — APN data session requires refresh",
+          "signal_strength_dbm": -89,
+          "last_heartbeat": "38 minutes ago",
+          "troubleshooting_steps": [
+            "1. Check Wi-Fi Band (2.4GHz vs 5GHz): Swipe down from the top of your Get Smart touchscreen, open Wi-Fi settings, forget the 5GHz network, and connect to a 2.4GHz Wi-Fi network.",
+            "2. Refresh 4G SIM Data Session: Open Settings > Network & Internet > Toggle Airplane Mode ON for 10 seconds, then turn it OFF so the built-in 4G SIM reconnects to the strongest carrier tower.",
+            "3. Reboot Terminal & Renew TLS Handshake: Hold the physical Power button on the side of the Get Smart for 5 seconds and tap 'Restart' (Reiniciar).",
+            "4. Run Connection Test: On the Getnet payment screen, tap Menu > Administrative > Connection Test (Teste de Comunicação)."
+          ]
+        }
+      },
+      "recent_declines": [
+        {
+          "transaction_id": "TXN-9844102",
+          "timestamp": "Today (18 minutes ago)",
+          "amount_brl": 340.00,
+          "payment_method": "Mastercard Credit (À Vista)",
+          "card_masked": "5412 **** **** 8821",
+          "iso8583_code": "51",
+          "error_label": "Code 51 — Insufficient Funds / Credit Limit Exceeded (Saldo ou Limite Insuficiente)",
+          "secondary_decline_code": "05 — Do Not Honor (Transação Não Autorizada pelo Emissor)",
+          "cause_explanation": "The latest transaction of R$ 340.00 on terminal POS-GN-884120 (Get Smart) was declined by the customer's card-issuing bank with ISO-8583 Error Code 51 (Insufficient Funds / Credit Limit Exceeded). Your card machine hardware and Getnet acquiring host are operating normally.",
+          "resolution_steps": [
+            "1. Inform the customer that their card issuer declined the transaction due to available limit/balance (Error Code 51).",
+            "2. Offer to process the payment using another card, Debit, or generate an instant Pix QR Code directly on the Get Smart screen.",
+            "3. If a secondary attempt returns Code 05 (Do Not Honor), ask the customer to unlock the card in their bank app or use chip & PIN instead of contactless.",
+            "4. If the terminal ever displays 'Card Read Error' (Erro de Leitura), clean the smartcard reader slot or restart the terminal."
+          ]
+        }
+      ],
+      "tickets": [
+        {
+          "ticket_id": "TCK-2026-198801",
+          "status": "RESOLVED",
+          "category": "CONSUMABLES",
+          "summary": "Scheduled thermal paper roll (bobina) kit delivery",
+          "created_at": "2026-10-12T14:20:00Z"
+        }
+      ]
+    },
+    "cliente2025": {
+      "user_id": "cliente2025",
+      "merchant_name": "Farmácia Central Sul",
+      "document_masked": "98.765.432/0001-10",
+      "city": "Curitiba, PR",
+      "account_status": "ACTIVE",
+      "settlement_plan": "Plano Fluxo D+2 (2-Business-Day Settlement)",
+      "settlement": {
+        "yesterday_sales_gross_brl": 2150.00,
+        "yesterday_sales_net_brl": 2095.80,
+        "yesterday_transactions_count": 31,
+        "deposit_status": "SCHEDULED_TOMORROW_D2",
+        "expected_deposit_date": "Tomorrow (D+2 business day settlement cycle)",
+        "expected_deposit_window": "Between 10:00 and 15:00 BRT",
+        "payout_method": "Automatic Bank Transfer (Domicílio Bancário)",
+        "bank_account": {
+          "bank_name": "Banco Itaú Unibanco S.A. (341)",
+          "branch": "0812",
+          "account_masked": "***9910-4",
+          "account_type": "Checking Account"
+        },
+        "upcoming_receivables_30d_brl": 9340.00,
+        "notes": "Yesterday's sales (R$ 2,095.80 net) follow your D+2 settlement plan and will be deposited tomorrow between 10:00 and 15:00 BRT."
+      },
+      "pos_terminal": {
+        "terminal_id": "POS-GN-331099",
+        "model": "Get Clássica (Physical Keypad + Thermal Printer)",
+        "serial_number": "SN-GCLASS-331099",
+        "firmware_version": "v3.8.2-getnet",
+        "connectivity": {
+          "current_status": "ONLINE",
+          "wifi_status": "Connected (2.4GHz Wi-Fi)",
+          "sim_4g_status": "Claro 4G Backup Ready",
+          "signal_strength_dbm": -62,
+          "last_heartbeat": "1 minute ago",
+          "troubleshooting_steps": [
+            "1. Press the Yellow (Clear) key + F1 on the Get Clássica keypad to open Network Configuration.",
+            "2. Select Wi-Fi or GPRS/4G and run a Communication Test."
+          ]
+        }
+      },
+      "recent_declines": [],
+      "tickets": []
+    }
+  }
+}
