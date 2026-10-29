@@ -473,7 +473,7 @@ def classify_and_route(
             timeout=6.0,
             max_retries=1,
         )
-        structured_llm = llm.with_structured_output(RouterPlan)
+        structured_llm = llm.with_structured_output(RouterPlan, method="function_calling")
         history_context = ""
         if chat_history:
             history_lines = [
