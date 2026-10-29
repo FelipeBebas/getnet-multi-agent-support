@@ -462,7 +462,7 @@ def classify_and_route(
     deterministic_plan = _deterministic_route(message=rewritten, user_id=user_id)
     deterministic_plan.rewritten_query = rewritten
 
-    if not settings.use_live_llm:
+    if not settings.use_live_llm or deterministic_plan.confidence >= 0.90:
         return deterministic_plan
 
     try:  # pragma: no cover
