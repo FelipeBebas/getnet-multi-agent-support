@@ -457,48 +457,8 @@ def classify_and_route(
     user_id: str = "",
     chat_history: list[dict[str, str]] | None = None,
 ) -> RouterPlan:
-    """Execute Agent 1 (Router Agent) using contextual query rewriting and structured LLM routing."""
+    """Execute Agent 1 (Router Agent) using contextual query rewriting and deterministic routing."""
     rewritten = rewrite_contextual_query(message=message, chat_history=chat_history)
     deterministic_plan = _deterministic_route(message=rewritten, user_id=user_id)
     deterministic_plan.rewritten_query = rewritten
-
-    if not settings.use_live_llm or deterministic_plan.confidence >= 0.90:
-        return deterministic_plan
-
-    try:  # pragma: no cover
-        llm = ChatOpenAI(
-            model=settings.openai_model,
-            temperature=settings.openai_temperature_router,
-            api_key=settings.openai_api_key,
-            timeout=6.0,
-            max_retries=1,
-        )
-        structured_llm = llm.with_structured_output(RouterPlan, method="function_calling")
-        history_context = ""
-        if chat_history:
-            history_lines = [
-                f"{m.get('role', 'user').capitalize()}: {m.get('content', '')}"
-                for m in chat_history[-4:]
-            ]
-            history_context = f"\nRecent History:\n" + "\n".join(history_lines)
-
-        llm_plan = structured_llm.invoke(
-            [
-                SystemMessage(content=ROUTER_SYSTEM_PROMPT),
-                HumanMessage(
-                    content=(
-                        f"user_id: {user_id}\n"
-                        f"message: {rewritten}"
-                        f"{history_context}"
-                    )
-                ),
-            ]
-        )
-        if isinstance(llm_plan, RouterPlan):
-            llm_plan.rewritten_query = rewritten
-            if llm_plan.primary_intent == "out_of_scope" or llm_plan.agent_queue:
-                return llm_plan
-    except Exception as exc:  # pragma: no cover
-        logger.warning("router_llm_fallback_to_deterministic", error=str(exc))
-
     return deterministic_plan
