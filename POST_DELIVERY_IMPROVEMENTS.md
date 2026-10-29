@@ -1,8 +1,8 @@
 # 📑 Post-Delivery Architectural Analysis & SDD Delta
 ## Getnet Multi-Agent Customer Support System
-**Data:** 28 de Outubro de 2026  
+**Data:** 28 de Outubro de 2026 (Atualizado em 29 de Outubro de 2026)  
 **Autor:** Felipe (Staff AI Engineer)  
-**Status:** Documentado para refatoração pós-submissão do vídeo  
+**Status:** ✅ Implementado e Validado via OpenSpec (`escalation-gating-by-risk-tier`)  
 
 ---
 
@@ -79,6 +79,10 @@ A nova especificação formal deve desacoplar a incerteza estatística da ação
 
 ---
 
-### 5. 🚀 Conclusão
+### 5. 🚀 Resolução Implementada
 
-Essa reflexão comprova a maturidade do ciclo de vida de software: identificar em tempo de execução onde a especificação foi abrangente demais e documentar o delta arquitetural para a próxima iteração.
+A melhoria foi formalmente implementada através da mudança OpenSpec `escalation-gating-by-risk-tier`:
+1. `RouterPlan` em `src/orchestration/state.py` recebeu o atributo `risk_tier: Literal["high", "medium", "low"] = "low"`.
+2. O prompt e o motor de classificação determinística em `src/agents/router_agent.py` foram atualizados para categorizar as intenções de acordo com a taxonomia de risco, com overrides determinísticos para tokens financeiros críticos (`chargeback`, `estorno`, `fraude`, `bloqueio`, `balanço`, `faturamento`).
+3. O LangGraph em `src/orchestration/graph.py` passou a condicionar o escalonamento automático de baixa confiança exclusivamente aos tiers `high` e `medium`. Consultas de risco `low` encerram o fluxo via `personality_agent` com aviso de evidência insuficiente, sem abrir chamado humano (`handoff_required=False`).
+4. Testes dedicados em `tests/unit/test_router.py` e `tests/unit/test_orchestrator.py` foram adicionados e integrados à suíte de testes contínua (100 testes automatizados).

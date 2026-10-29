@@ -95,6 +95,38 @@ def test_router_agent_human_escalation_classification() -> None:
         user_id="cliente1988",
     )
     assert "escalation_agent" in plan.agent_queue
+    assert plan.risk_tier == "high"
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_risk_tier"),
+    [
+        # High Risk: fraud, chargeback, transaction decline, blocked machine
+        ("I need to dispute a chargeback fraud on my account.", "high"),
+        ("Minha máquina está dando erro de transação negada no caixa.", "high"),
+        ("Sofri um golpe e quero estorno imediato.", "high"),
+        ("Terminal travado e bloqueado durante a venda.", "high"),
+        # Medium Risk: ledger reconciliation, balance/revenue, fees, payout schedule, connectivity
+        ("Qual foi o faturamento e balanço exato da Getnet em 2005?", "medium"),
+        ("Quando cai o dinheiro das vendas de ontem?", "medium"),
+        ("Quais são as taxas e tarifas cobradas no plano?", "medium"),
+        ("Minha maquininha não conecta na internet.", "medium"),
+        ("Quero abrir um chamado para trocar minha máquina.", "medium"),
+        # Low Risk: general product FAQ, company trivia, public info
+        ("Quando a Getnet foi fundada?", "low"),
+        ("What's the difference between the Get Clássica and the Get Smart?", "low"),
+        ("What's the weather forecast in Porto Alegre tomorrow?", "low"),
+        ("Como funciona o link de pagamento GetPay?", "low"),
+        ("Quantas parcelas posso fazer no crediário?", "low"),
+    ],
+)
+def test_router_agent_risk_tier_classification(
+    message: str,
+    expected_risk_tier: str,
+) -> None:
+    """Verify Router Agent categorizes inquiries into high, medium, and low business risk tiers."""
+    plan = classify_and_route(message=message, user_id="cliente1988")
+    assert plan.risk_tier == expected_risk_tier
 
 
 def test_langgraph_single_and_sequential_multi_agent_execution() -> None:
@@ -195,7 +227,7 @@ def test_low_confidence_unverified_query_triggers_human_escalation_without_65_fl
     monkeypatch.setattr(ka, "web_search_general", _mock_empty_web_search)
 
     out = execute_orchestration(
-        message="Quantum Holographic Satellite Orbit 2099",
+        message="Contestação de transação não identificada Quantum Holographic Orbit 2099",
         user_id="cliente1988",
     )
     assert out["confidence_score"] < 0.60

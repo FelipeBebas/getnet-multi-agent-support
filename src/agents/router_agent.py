@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -35,7 +36,12 @@ Your job is to analyze the incoming merchant message and determine which special
    - Messages that are test noise (e.g. "123 teste block"), random gibberish, empty greetings, or completely unrelated chit-chat with no acquiring/support intent. Set `primary_intent="out_of_scope"` and leave `agent_queue` empty (`[]`).
 
 If a message combines multiple intents (for example, asking a product/knowledge question AND checking yesterday's sales deposit or POS status), include both agents in `agent_queue` in logical order: `["knowledge_agent", "customer_support_agent"]`.
-Detect whether the message is in English (`"en"`) or Portuguese (`"pt"`)."""
+Detect whether the message is in English (`"en"`) or Portuguese (`"pt"`).
+
+Business Risk Tier Classification (`risk_tier`):
+- `high`: Financial loss, active fraud, chargebacks, disputed settlement, blocked hardware/terminals during sales, or explicit escalation.
+- `medium`: Ledger reconciliation, balance/revenue figures, fee disputes, plan change negotiations, contract terms.
+- `low`: Informational inquiries, general corporate trivia, product catalog, onboarding FAQs, portal navigation."""
 
 
 def detect_language(message: str) -> str:
@@ -410,7 +416,50 @@ def _deterministic_route(message: str, user_id: str = "") -> RouterPlan:
             confidence=0.95,
             language=lang,
             reasoning="Message classified as out-of-scope / test noise with no acquiring or support intent.",
+            risk_tier="low",
         )
+
+    # Classify Business Risk Tier
+    critical_financial_tokens = (
+        "chargeback",
+        "estorno",
+        "fraude",
+        "fraud",
+        "golpe",
+        "scam",
+        "contestação",
+        "contestacao",
+        "bloqueada",
+        "bloqueado",
+        "bloqueio",
+        "travada",
+        "travado",
+    )
+    ledger_tokens = (
+        "balanço",
+        "balanco",
+        "faturamento",
+        "receita",
+        "extrato",
+        "taxa",
+        "tarifa",
+        "comissão",
+        "comissao",
+        "fee",
+        "settlement",
+        "repasse",
+        "depósito",
+        "deposito",
+        "vendas de ontem",
+        "yesterday's sales",
+    )
+
+    if wants_escalation or has_decline or any(t in q for t in critical_financial_tokens):
+        risk_tier: Literal["high", "medium", "low"] = "high"
+    elif has_settlement or has_pos_conn or has_ticket or any(t in q for t in ledger_tokens):
+        risk_tier = "medium"
+    else:
+        risk_tier = "low"
 
     queue: list[SpecializedAgentName] = []
     if wants_knowledge:
@@ -437,7 +486,7 @@ def _deterministic_route(message: str, user_id: str = "") -> RouterPlan:
     confidence = 0.96 if (wants_knowledge or wants_support or wants_escalation) else 0.78
     reasoning = (
         f"Classified intent as '{primary_intent}' -> queue={queue} "
-        f"(knowledge_sub='{knowledge_sub}', support_sub='{support_sub}', user_id='{user_id}')."
+        f"(knowledge_sub='{knowledge_sub}', support_sub='{support_sub}', risk_tier='{risk_tier}', user_id='{user_id}')."
     )
 
     return RouterPlan(
@@ -448,6 +497,7 @@ def _deterministic_route(message: str, user_id: str = "") -> RouterPlan:
         confidence=confidence,
         language=lang,  # type: ignore[arg-type]
         reasoning=reasoning,
+        risk_tier=risk_tier,
     )
 
 

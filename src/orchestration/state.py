@@ -57,6 +57,10 @@ class RouterPlan(BaseModel):
         default="",
         description="Standalone contextual query produced by Contextual Query Rewriter.",
     )
+    risk_tier: Literal["high", "medium", "low"] = Field(
+        default="low",
+        description="Business risk tier: high (financial loss/fraud/block), medium (ledger/fees/disputes), low (informational/FAQ).",
+    )
 
 
 class AgentStepOutput(BaseModel):

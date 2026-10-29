@@ -16,9 +16,12 @@ from src.guardrails.validator import (
     sanitize_output_message,
     validate_input_message,
 )
+from src.observability.logger import get_logger
 from src.observability.tracer import trace_recorder, traceable_step
 from src.orchestration.session_store import session_store
 from src.orchestration.state import OrchestrationState
+
+logger = get_logger("orchestration.graph")
 
 
 def _input_guardrail_node(state: OrchestrationState) -> OrchestrationState:
@@ -388,11 +391,28 @@ def _dispatch_next_from_queue(state: OrchestrationState) -> str:
         if next_agent in ("knowledge_agent", "customer_support_agent", "escalation_agent"):
             return next_agent
 
-    # Automatic confidence-based escalation check
+    # Automatic confidence-based escalation check gated by business risk tier
     conf = float(state.get("confidence_score") or 1.0)
     routed = list(state.get("routed_agents") or [])
+    risk_tier = str(plan.get("risk_tier") or "low")
+
     if conf < settings.confidence_escalation_threshold and "escalation_agent" not in routed:
-        return "escalation_agent"
+        if risk_tier in ("high", "medium"):
+            logger.warning(
+                "orchestrator.escalating_low_confidence",
+                confidence=conf,
+                threshold=settings.confidence_escalation_threshold,
+                risk_tier=risk_tier,
+            )
+            return "escalation_agent"
+
+        logger.info(
+            "orchestrator.escalation_suppressed_low_risk",
+            confidence=conf,
+            threshold=settings.confidence_escalation_threshold,
+            risk_tier=risk_tier,
+            reason="Informational low-risk query with epistemic uncertainty does not require human ticket.",
+        )
 
     return "personality_agent"
 
