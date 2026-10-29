@@ -27,6 +27,11 @@ data/chroma_db/
 logs/
 *.log
 
+# Large media files (videos)
+*.mp4
+*.mkv
+*.mov
+
 # Challenge brief PDF (markdown version is tracked)
 AI_Hardcore_Engineer_Multi-Agent.pdf
 

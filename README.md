@@ -14,8 +14,13 @@ Production-grade **Spec-Driven Multi-Agent Support System** engineered for the *
 
 ## 🎥 Video Presentation & Walkthrough
 
-> **Submission Video Link:** [**Watch Solution Walkthrough on YouTube / Loom (Max 15 min)**](https://github.com/FelipeBebas/getnet-multi-agent-support) *(Paste final video URL here)*  
-> *A 15-minute guided walkthrough covering architectural choices, state graph orchestration, live dashboard demo, RAG grounding, and automated evaluation.*
+[![Getnet Multi-Agent Solution Walkthrough](docs/assets/video-thumbnail.png)](https://drive.google.com/file/d/1MhL4jDibYF79vLd7Dm_1SuRnT12zpLuW/view?usp=sharing)
+
+<p align="center">
+  <em>▶️ <b><a href="https://drive.google.com/file/d/1MhL4jDibYF79vLd7Dm_1SuRnT12zpLuW/view?usp=sharing" target="_blank" rel="noopener noreferrer">Assistir ao Walkthrough da Solução (13 min) no Google Drive</a></b></em>
+</p>
+
+> **Apresentação em Vídeo da Solução:** Walkthrough guiado de ~13 minutos demonstrando a arquitetura multiagente com 5 agentes em LangGraph, as guardrails bidirecionais de segurança (PCI-DSS & LGPD), a busca híbrida com ChromaDB, os testes automatizados e a demonstração ao vivo no dashboard.
 
 ---
 

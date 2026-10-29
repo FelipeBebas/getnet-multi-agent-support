@@ -8,6 +8,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Mission: Getnet Multi-Agent Support System</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="alternate icon" type="image/x-icon" href="/favicon.ico" />
+  <link rel="apple-touch-icon" href="/favicon.png" />
   <style>
     :root {
       --brand-red: #EC0000;
@@ -2179,7 +2182,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <span class="meta-pill"><strong>Tools:</strong> ${(data.tools_used && data.tools_used.length) ? data.tools_used.join(', ') : 'None'}</span>
         <span class="meta-pill"><strong>Confidence:</strong> ${Number(data.confidence_score).toFixed(2)}</span>
         <span class="meta-pill"><strong>Latency:</strong> ${Number(data.latency_ms).toFixed(1)}ms</span>
-        <span class="meta-pill ${data.slo_violated ? 'danger' : 'success'}"><strong>SLO:</strong> ${data.slo_tier === 'complex_path' ? 'Deep Path (≤18s)' : 'Fast Path (≤7s)'} · ${data.slo_violated ? 'Violado' : 'Atingido'}</span>
         <span class="meta-pill"><strong>Trace ID:</strong> ${data.trace_id}</span>
         <span class="meta-pill ${data.guardrail_triggered ? 'danger' : 'success'}">${data.guardrail_triggered ? 'Guardrail Blocked' : 'Ingress/Egress Clear'}</span>
         <span class="meta-pill ${data.handoff_required ? 'warning' : ''}">${data.handoff_required ? 'Human Specialist Notified' : 'AI Handled'}</span>

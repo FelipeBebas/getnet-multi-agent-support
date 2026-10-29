@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from src.api.dashboard import DASHBOARD_HTML
 from src.api.schemas import ChatRequest, ChatResponse, EvalRunRequest, HealthResponse
@@ -166,3 +167,50 @@ async def run_evals_endpoint(
 async def dashboard_endpoint() -> HTMLResponse:
     """Serve the interactive Visual Explainer & Live Observability Dashboard."""
     return HTMLResponse(content=DASHBOARD_HTML, status_code=200)
+
+
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+FAVICON_ICO_PATH = STATIC_DIR / "favicon.ico"
+FAVICON_SVG_PATH = STATIC_DIR / "favicon.svg"
+FAVICON_PNG_PATH = STATIC_DIR / "favicon.png"
+
+
+@router.get("/favicon.ico", include_in_schema=False)
+async def favicon_ico_endpoint() -> FileResponse:
+    """Serve the application favicon in ICO format."""
+    if FAVICON_ICO_PATH.exists():
+        return FileResponse(
+            FAVICON_ICO_PATH,
+            media_type="image/x-icon",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+    return FileResponse(
+        FAVICON_SVG_PATH,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@router.get("/favicon.svg", include_in_schema=False)
+async def favicon_svg_endpoint() -> FileResponse:
+    """Serve crisp vector favicon.svg for modern browsers."""
+    if FAVICON_SVG_PATH.exists():
+        return FileResponse(
+            FAVICON_SVG_PATH,
+            media_type="image/svg+xml",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+    raise HTTPException(status_code=404, detail="Favicon SVG not found")
+
+
+@router.get("/favicon.png", include_in_schema=False)
+async def favicon_png_endpoint() -> FileResponse:
+    """Serve high-resolution favicon.png."""
+    if FAVICON_PNG_PATH.exists():
+        return FileResponse(
+            FAVICON_PNG_PATH,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+    raise HTTPException(status_code=404, detail="Favicon PNG not found")
+

@@ -20,6 +20,7 @@ services:
       - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-getnet-multi-agent-support}
     volumes:
       - ./logs:/app/logs
+      - ./src:/app/src
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s

@@ -182,3 +182,37 @@ def test_post_evals_run_endpoint(api_client: TestClient) -> None:
     assert "rubric_groundedness_pct" in data
     assert "total_tokens_consumed" in data
     assert len(data["scenarios"]) == 2
+
+
+def test_favicon_endpoints_and_dashboard_links(api_client: TestClient) -> None:
+    """Verify favicon endpoints (/favicon.ico, /favicon.svg, /favicon.png) return 200 with correct media types."""
+    # 1. Test /favicon.ico
+    ico_resp = api_client.get("/favicon.ico")
+    assert ico_resp.status_code == 200
+    assert "image/x-icon" in ico_resp.headers["content-type"]
+    assert len(ico_resp.content) > 0
+
+    # 2. Test /favicon.svg
+    svg_resp = api_client.get("/favicon.svg")
+    assert svg_resp.status_code == 200
+    assert "image/svg+xml" in svg_resp.headers["content-type"]
+    assert "<svg" in svg_resp.text
+    assert "#EC0000" in svg_resp.text
+    assert ">G<" in svg_resp.text
+
+    # 3. Test /favicon.png
+    png_resp = api_client.get("/favicon.png")
+    assert png_resp.status_code == 200
+    assert "image/png" in png_resp.headers["content-type"]
+    assert len(png_resp.content) > 0
+
+    # 4. Test /static/ mount
+    static_svg_resp = api_client.get("/static/favicon.svg")
+    assert static_svg_resp.status_code == 200
+
+    # 5. Verify /dashboard HTML includes the favicon links
+    dash_resp = api_client.get("/dashboard")
+    assert dash_resp.status_code == 200
+    assert '<link rel="icon" type="image/svg+xml" href="/favicon.svg"' in dash_resp.text
+    assert '<link rel="alternate icon" type="image/x-icon" href="/favicon.ico"' in dash_resp.text
+
