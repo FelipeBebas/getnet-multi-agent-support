@@ -293,7 +293,12 @@ def _deterministic_route(message: str, user_id: str = "") -> RouterPlan:
     ticket_patterns = (
         r"open\s+a\s+(?:support\s+)?ticket",
         r"create\s+a\s+(?:support\s+)?ticket",
-        r"check\s+my\s+ticket",
+        r"check\s+(?:the\s+status\s+of\s+)?(?:my\s+)?(?:support\s+)?tickets?",
+        r"(?:check|view|see)\s+(?:my\s+)?(?:support\s+)?tickets?",
+        r"status\s+(?:of|do|de)\s+(?:my\s+|meu\s+|o\s+)?(?:chamado|ticket)",
+        r"(?:meu|meus)\s+(?:chamado|chamados|ticket|tickets)",
+        r"ticket\s+status",
+        r"tck-\d+",
         r"replace\s+my\s+card\s+machine",
         r"abrir\s+(?:um\s+)?chamado",
         r"protocolo\s+de\s+suporte",

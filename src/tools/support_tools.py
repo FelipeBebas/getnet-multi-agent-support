@@ -184,7 +184,7 @@ def manage_support_ticket(
     existing_tickets.extend(_RUNTIME_CREATED_TICKETS.get(clean_uid, []))
 
     created_ticket: dict[str, Any] | None = None
-    if norm_action in ("create", "open", "check_or_create"):
+    if norm_action in ("create", "open"):
         digest = hashlib.md5(f"{clean_uid}:{issue_summary}".encode("utf-8")).hexdigest()[:6].upper()
         ticket_id = f"TCK-2026-{digest}"
         created_ticket = {
@@ -198,13 +198,38 @@ def manage_support_ticket(
         }
         _RUNTIME_CREATED_TICKETS.setdefault(clean_uid, []).append(created_ticket)
         existing_tickets.append(created_ticket)
+    elif norm_action == "check_or_create":
+        if not existing_tickets:
+            digest = hashlib.md5(f"{clean_uid}:{issue_summary}".encode("utf-8")).hexdigest()[:6].upper()
+            ticket_id = f"TCK-2026-{digest}"
+            created_ticket = {
+                "ticket_id": ticket_id,
+                "user_id": clean_uid,
+                "status": "OPEN_IN_PROGRESS",
+                "category": category,
+                "summary": issue_summary,
+                "sla_target": "Remote APN/Switch reset within 2h; onsite terminal replacement within 24h if hardware fault persists",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _RUNTIME_CREATED_TICKETS.setdefault(clean_uid, []).append(created_ticket)
+            existing_tickets.append(created_ticket)
 
-    summary = (
-        f"Support Ticket Protocol {created_ticket['ticket_id']} registered for {clean_uid} "
-        f"({created_ticket['summary']}). SLA: {created_ticket['sla_target']}."
-        if created_ticket
-        else f"Retrieved {len(existing_tickets)} ticket(s) for merchant {clean_uid}."
-    )
+    if created_ticket:
+        summary = (
+            f"Support Ticket Protocol {created_ticket['ticket_id']} registered for {clean_uid} "
+            f"({created_ticket['summary']}). SLA: {created_ticket['sla_target']}."
+        )
+    elif existing_tickets:
+        ticket_summaries = [
+            f"Ticket {t.get('ticket_id')} [{t.get('status')}]: {t.get('summary')} (Category: {t.get('category')})"
+            for t in existing_tickets
+        ]
+        summary = (
+            f"Merchant {clean_uid} has {len(existing_tickets)} registered ticket(s): "
+            + " || ".join(ticket_summaries)
+        )
+    else:
+        summary = f"No support tickets found for merchant {clean_uid}."
 
     return {
         "tool_name": "manage_support_ticket",

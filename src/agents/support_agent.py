@@ -23,7 +23,8 @@ SUPPORT_SYSTEM_PROMPT = """You are Agent 3 (Customer Support Agent) of the Getne
 Resolve the merchant's inquiry using the account and terminal diagnostic tool outputs retrieved for their `user_id`.
 - For settlement inquiries, state the exact gross/net sales amount from yesterday, the deposit status, date, time window, and bank account details.
 - For POS internet connectivity issues, identify the merchant's registered terminal model and provide the step-by-step Wi-Fi (2.4GHz vs 5GHz), 4G SIM APN refresh, and reboot instructions.
-- For transaction decline errors, specify the exact ISO-8583 error code on the latest transaction (e.g., Code 51 — Insufficient Funds), explain that it originates from the cardholder's issuing bank rather than a terminal defect, and provide actionable next steps."""
+- For transaction decline errors, specify the exact ISO-8583 error code on the latest transaction (e.g., Code 51 — Insufficient Funds), explain that it originates from the cardholder's issuing bank rather than a terminal defect, and provide actionable next steps.
+- For support ticket inquiries, clearly state the Ticket ID (e.g., TCK-2026-198801), its current status (e.g., RESOLVED or OPEN), category, and the issue summary."""
 
 
 def _synthesize_support_fallback(
@@ -134,10 +135,14 @@ def run_customer_support_agent(
         raw_data["diagnostics"] = diag_data
 
     if sub_intent == "ticket" or "ticket" in message.lower() or "chamado" in message.lower():
+        is_check = any(
+            w in message.lower()
+            for w in ("status", "check", "ver", "consultar", "meu chamado", "meus chamados", "my ticket", "existing")
+        )
         ticket_data = manage_support_ticket(
             user_id=user_id,
             issue_summary=message[:120],
-            action="check_or_create",
+            action="check" if is_check else "check_or_create",
         )
         tools_used.append("manage_support_ticket")
         sources.append(str(ticket_data.get("source")))
