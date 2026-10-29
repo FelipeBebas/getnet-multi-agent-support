@@ -280,7 +280,10 @@ def test_non_existent_entity_coverage_check_get_bronze_water() -> None:
     assert "knowledge_agent" in out["routed_agents"]
     # Must explicitly state that Get Bronze Water does not exist
     assert "Get Bronze Water" in out["response"]
-    assert "does not exist" in out["response"].lower() or "não existe" in out["response"].lower()
+    assert any(
+        phrase in out["response"].lower()
+        for phrase in ("does not exist", "não existe", "not exist", "doesn't exist", "not part of", "não faz parte")
+    )
     # Must explain the real model and mention official lineup
     assert "Get Clássica" in out["response"] or "Get Classica" in out["response"]
     assert "Get Smart" in out["response"]

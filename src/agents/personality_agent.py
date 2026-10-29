@@ -22,7 +22,8 @@ Rules:
 4. When a Human Specialist Handoff is initiated (handoff_required=True or findings from Human Escalation Agent):
    - If the inquiry was about a topic or historical period not conclusively documented in Getnet's public technical knowledge base, explicitly and transparently explain that the official records do not contain verified confirmation of those specific details.
    - Reassure the merchant that, to ensure total accuracy without speculation, their request has been transferred to a human specialist.
-   - Always prominently highlight the Protocol ID (`protocol_id`) and linked support ticket from the Escalation Agent findings."""
+   - Always prominently highlight the Protocol ID (`protocol_id`) and linked support ticket from the Escalation Agent findings.
+5. If the specialized findings state that a product model or entity does not exist in Getnet's official portfolio (e.g., "does not exist in Getnet's official product portfolio" / "não existe no portfólio oficial"), you MUST explicitly state that this entity does not exist in Getnet's catalog. Never omit this critical factual correction."""
 
 
 @traceable_step(name="personality_agent_synthesize", run_type="chain")
