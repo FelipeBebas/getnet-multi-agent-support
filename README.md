@@ -5,7 +5,7 @@
 [![LangGraph](https://img.shields.io/badge/LangGraph-StateGraph-orange.svg)](https://langchain-ai.github.io/langgraph/)
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-Vector_Store-green.svg)](https://www.trychroma.com/)
 [![OpenSpec](https://img.shields.io/badge/Spec--Driven-OpenSpec-purple.svg)](https://github.com/openspec)
-[![Tests Passing](https://img.shields.io/badge/Tests-80%2F80%20PASS-brightgreen.svg)](tests/)
+[![Tests Passing](https://img.shields.io/badge/Tests-100%2F100%20PASS-brightgreen.svg)](tests/)
 [![Challenge Benchmark](https://img.shields.io/badge/Challenge%20Scenarios-10%2F10%20(100%25)-success.svg)](scripts/evaluate.py)
 
 Production-grade **Spec-Driven Multi-Agent Support System** engineered for the **Getnet AI Hardcore Engineer Challenge**. Built with **Python 3.12**, **FastAPI**, **LangGraph**, **ChromaDB**, **LangSmith**, and **OpenSpec**.
@@ -43,12 +43,12 @@ flowchart TD
     Support <--> STools[("Support Tools:\n1. get_merchant_settlement_status\n2. diagnose_pos_and_transactions\n3. manage_support_ticket")]
     Escalation <--> ETools[("Escalation Tools:\n1. dispatch_human_handoff\n2. manage_support_ticket")]
 
-    Knowledge --> QueueGate{"Next queued agent\nor Confidence < 0.60?"}
+    Knowledge --> QueueGate{"Next queued agent\nor Low Confidence & Risk?"}
     Support --> QueueGate
 
     QueueGate -- "Next: customer_support" --> Support
-    QueueGate -- "Low Confidence (< 0.60)" --> Escalation
-    QueueGate -- "Complete" --> Personality["Agent 5: Personality Agent\n(Synthesis, Empathy & SSE Token Streaming)"]
+    QueueGate -- "Low Conf & High/Medium Risk" --> Escalation
+    QueueGate -- "Complete / Low Risk" --> Personality["Agent 5: Personality Agent\n(Synthesis, Empathy & SSE Token Streaming)"]
 
     Escalation --> Personality
     Personality --> OutGuard
@@ -69,7 +69,7 @@ flowchart TD
    - Resolves merchant-specific account and hardware troubleshooting for a given `user_id` (e.g., `cliente1988` - Padaria & Café Bela Vista Ltda).
    - Equips **3 domain tools**: settlement schedule lookup, POS network telemetry & ISO-8583 decline diagnostics, and technical support ticket management.
 4. **Agent 4 (Bonus) — Human Escalation & Handoff Agent (`src/agents/escalation_agent.py`)**:
-   - Activated on explicit human attendant requests, contested chargebacks, or whenever end-to-end resolution confidence falls below `< 0.60`.
+   - Activated on explicit human attendant requests, contested chargebacks, or whenever end-to-end resolution confidence falls below `< 0.60` on High/Medium business risk inquiries (while low-risk informational queries complete with epistemic caveats without opening human tickets).
    - Dispatches structured handoffs (`ESC-GN-XXXXXX`), opens linked CRM tickets (`TCK-2026-ESC`), and forwards conversation context to Tier-2 specialist desks.
 5. **Agent 5 — Personality & Output Synthesis Agent (`src/agents/personality_agent.py`)**:
    - Synthesizes findings from upstream domain agents into an empathetic, brand-aligned response in the merchant's language (`en` or `pt`).
@@ -134,7 +134,7 @@ Following the challenge guidelines (*"Use Spec Driven Development, and spend at 
    - Local RAG vector store and baseline support tools operational.
 2. **Phase 2 — Enterprise Hardening & Bonus Engineering:**
    - **Security & Privacy Guardrails**: Prompt-injection ingress defense and egress PCI-DSS PAN / LGPD CPF masking.
-   - **Quality & Testing**: 80 automated unit and integration tests with 100% pass rate.
+   - **Quality & Testing**: 100 automated unit and integration tests with 100% pass rate.
    - **Observability & Reliability**: Multi-tier dynamic SLO latency alerting, LangSmith tracing, and token usage accounting.
    - **Bonus Agents & UX**: 4th Human Escalation Agent, 5th Personality Agent with SSE streaming, and the interactive `/dashboard`.
 
@@ -231,10 +231,11 @@ curl -X POST http://localhost:8000/chat \
 
 ### Automated Test Pyramid
 
-The test suite covers **80 automated tests** structured across 3 tiers:
+The test suite covers **100 automated tests** structured across 3 tiers:
 
 1. **Unit Tests (`tests/unit/`)**:
-   - `test_router.py`: Intent classification, multi-intent hybrid routing, query rewriting, epistemic uncertainty handling.
+   - `test_router.py`: Intent classification, multi-intent hybrid routing, query rewriting, and 3-tier business risk classification (`high`, `medium`, `low`).
+   - `test_orchestrator.py`: LangGraph dispatching and risk-gated conditional escalation logic.
    - `test_rag.py`: Markdown parser, semantic chunking, ChromaDB indexing, top-$k$ retrieval accuracy.
    - `test_tools.py`: All 6 LangChain tools (settlement, POS telemetry, tickets, handoff, RAG, weather, FX).
    - `test_guardrails.py`: Ingress prompt injection blocking and egress PCI PAN / LGPD CPF masking.
@@ -263,7 +264,7 @@ The test suite covers **80 automated tests** structured across 3 tiers:
 ### How to Run Tests & Evaluation Benchmark
 
 ```bash
-# Run complete test suite (80 passed)
+# Run complete test suite (100 passed)
 .venv/Scripts/pytest.exe -v
 
 # Run automated evaluation benchmark CLI (computes routing, tool & groundedness accuracy)
