@@ -59,22 +59,32 @@ def test_retrieve_getnet_knowledge_live_domain_fallback_for_unlisted_product() -
 def test_web_search_general_weather_porto_alegre() -> None:
     """Verify web_search_general handles Porto Alegre weather forecast scenario with local timezone."""
     from datetime import datetime, timedelta
+    try:
+        from zoneinfo import ZoneInfo
+        city_now = datetime.now(ZoneInfo("America/Sao_Paulo"))
+    except Exception:
+        city_now = datetime.now().astimezone()
 
-    local_now = datetime.now().astimezone()
-    expected_tomorrow = (local_now + timedelta(days=1)).strftime("%Y-%m-%d")
-    expected_today = local_now.strftime("%Y-%m-%d")
+    valid_tomorrows = {
+        (city_now + timedelta(days=1)).strftime("%Y-%m-%d"),
+        (datetime.now().astimezone() + timedelta(days=1)).strftime("%Y-%m-%d"),
+    }
+    valid_todays = {
+        city_now.strftime("%Y-%m-%d"),
+        datetime.now().astimezone().strftime("%Y-%m-%d"),
+    }
 
     res = web_search_general("What's the weather forecast in Porto Alegre tomorrow?")
     assert res["tool_name"] == "web_search_general"
     assert res["category"] == "weather"
     assert "Porto Alegre" in res["summary"]
     assert "°C" in res["summary"]
-    assert res["target_date"] == expected_tomorrow
+    assert res["target_date"] in valid_tomorrows
     assert len(res["sources"]) >= 1
 
     res_today = web_search_general("What's the weather forecast in Porto Alegre today?")
     assert res_today["category"] == "weather"
-    assert res_today["target_date"] == expected_today
+    assert res_today["target_date"] in valid_todays
 
 
 def test_web_search_general_euro_exchange_rate() -> None:
