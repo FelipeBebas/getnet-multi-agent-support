@@ -145,7 +145,7 @@ Following the challenge guidelines (*"Use Spec Driven Development, and spend at 
 ### Option A: Run with Docker Compose (Recommended)
 
 ```bash
-# 1. (Optional) Copy .env.example to .env and insert your OPENAI_API_KEY / LANGCHAIN_API_KEY
+# 1. (Recommended) Copy .env.example to .env and configure your OPENAI_API_KEY / LANGCHAIN_API_KEY
 cp .env.example .env
 
 # 2. Build and start the service in background
