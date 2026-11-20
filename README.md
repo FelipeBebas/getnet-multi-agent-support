@@ -312,7 +312,122 @@ Access `http://localhost:8000/dashboard` in your browser (authenticated via oper
 
 ---
 
-## 10. Repository File Structure
+## 10. Repository File Structure & Interactive Module Map
+
+```mermaid
+flowchart TD
+
+subgraph group_gateway["API Gateway"]
+  node_api["HTTP Routes<br/>[routes.py]"]
+  node_auth["Auth & RBAC<br/>[auth.py]"]
+  node_limits["Rate Limits & Budgets<br/>[rate_limit.py]"]
+  node_dashboard["HITL Dashboard<br/>[dashboard.py]"]
+end
+
+subgraph group_workflow["Agent Workflow"]
+  node_graph["LangGraph Runner<br/>[graph.py]"]
+  node_state_schema["Workflow State<br/>[state.py]"]
+  node_router["Intent & Risk Router<br/>[router_agent.py]"]
+end
+
+subgraph group_domain["Support Domains"]
+  node_knowledge["Knowledge Agent<br/>[knowledge_agent.py]"]
+  node_support["Support Agent<br/>[support_agent.py]"]
+  node_escalation["Escalation Agent<br/>[escalation_agent.py]"]
+  node_personality["Response Synthesis<br/>[personality_agent.py]"]
+  node_knowledge_tools["Knowledge Tools<br/>[knowledge_tools.py]"]
+  node_support_tools["Merchant Tools<br/>[support_tools.py]"]
+  node_escalation_tools["Handoff Tools<br/>[escalation_tools.py]"]
+end
+
+subgraph group_state["State & Retrieval"]
+  node_ingest["Knowledge Ingestion<br/>[ingest.py]"]
+  node_vector[("Vector Retrieval<br/>[vector_store.py]")]
+  node_sessions[("Session History<br/>[session_store.py]")]
+  node_persistence[("SQLite Persistence<br/>[persistence.py]")]
+  node_merchant_data[("Merchant Ledger<br/>[merchants.json]")]
+end
+
+subgraph group_safety["Safety, Evals & Operations"]
+  node_validator["Guardrails<br/>[validator.py]"]
+  node_redaction["PCI/LGPD Masking<br/>[redaction.py]"]
+  node_tracing["Tracing & Alerts<br/>[tracer.py]"]
+  node_logger["Structured Logging<br/>[logger.py]"]
+  node_evals["Ragas Evals Suite<br/>[evaluate.py]"]
+end
+
+node_client(("Merchant / Operator"))
+node_operator(("Human Operator"))
+
+node_client -->|"sends request"| node_api
+node_api -->|"authenticates"| node_auth
+node_api -->|"applies limits"| node_limits
+node_api -->|"runs workflow"| node_graph
+node_api -->|"triggers evals"| node_evals
+node_api -->|"serves dashboard"| node_dashboard
+node_graph -->|"uses state"| node_state_schema
+node_graph -->|"dispatches"| node_router
+node_graph -->|"dispatches"| node_knowledge
+node_graph -->|"dispatches"| node_support
+node_graph -->|"interrupts / resumes"| node_escalation
+node_graph -->|"synthesizes with"| node_personality
+node_graph -->|"validates & sanitizes"| node_validator
+node_graph -->|"stores turns"| node_sessions
+node_graph -->|"records handoffs"| node_persistence
+node_sessions -->|"opens SQLite"| node_persistence
+node_knowledge -->|"uses tools"| node_knowledge_tools
+node_knowledge_tools -->|"retrieves chunks"| node_vector
+node_support -->|"uses tools"| node_support_tools
+node_support_tools -->|"reads merchant data"| node_merchant_data
+node_support_tools -->|"persists tickets"| node_persistence
+node_escalation -->|"uses tools"| node_escalation_tools
+node_escalation -->|"manages tickets"| node_support_tools
+node_operator -->|"reviews handoffs"| node_dashboard
+node_dashboard -->|"resumes workflow"| node_api
+node_ingest -->|"indexes knowledge"| node_vector
+node_evals -->|"benchmarks"| node_graph
+node_validator -->|"masks PII/secrets"| node_redaction
+node_graph -->|"records execution"| node_tracing
+node_tracing -->|"masks spans/traces"| node_redaction
+node_tracing -->|"emits events"| node_logger
+node_logger -->|"masks log fields"| node_redaction
+
+click node_api "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/api/routes.py"
+click node_auth "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/api/auth.py"
+click node_limits "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/api/rate_limit.py"
+click node_dashboard "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/api/dashboard.py"
+click node_graph "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/orchestration/graph.py"
+click node_state_schema "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/orchestration/state.py"
+click node_router "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/agents/router_agent.py"
+click node_knowledge "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/agents/knowledge_agent.py"
+click node_support "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/agents/support_agent.py"
+click node_escalation "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/agents/escalation_agent.py"
+click node_personality "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/agents/personality_agent.py"
+click node_knowledge_tools "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/tools/knowledge_tools.py"
+click node_support_tools "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/tools/support_tools.py"
+click node_escalation_tools "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/tools/escalation_tools.py"
+click node_ingest "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/rag/ingest.py"
+click node_vector "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/rag/vector_store.py"
+click node_sessions "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/orchestration/session_store.py"
+click node_persistence "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/orchestration/persistence.py"
+click node_validator "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/guardrails/validator.py"
+click node_redaction "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/guardrails/redaction.py"
+click node_tracing "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/observability/tracer.py"
+click node_logger "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/src/observability/logger.py"
+click node_evals "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/scripts/evaluate.py"
+click node_merchant_data "https://github.com/FelipeBebas/getnet-multi-agent-support/blob/main/data/merchants.json"
+
+classDef toneBlue fill:#dbeafe,stroke:#2563eb,stroke-width:1.5px,color:#172554
+classDef toneAmber fill:#fef3c7,stroke:#d97706,stroke-width:1.5px,color:#78350f
+classDef toneMint fill:#dcfce7,stroke:#16a34a,stroke-width:1.5px,color:#14532d
+classDef toneRose fill:#ffe4e6,stroke:#e11d48,stroke-width:1.5px,color:#881337
+classDef toneIndigo fill:#e0e7ff,stroke:#4f46e5,stroke-width:1.5px,color:#312e81
+class node_api,node_auth,node_limits,node_dashboard toneBlue
+class node_graph,node_state_schema,node_router toneAmber
+class node_knowledge,node_support,node_escalation,node_personality,node_knowledge_tools,node_support_tools,node_escalation_tools toneMint
+class node_ingest,node_vector,node_sessions,node_persistence,node_merchant_data toneRose
+class node_validator,node_redaction,node_tracing,node_logger,node_evals,node_client,node_operator toneIndigo
+```
 
 ```text
 getnet-multi-agent/
