@@ -2,206 +2,199 @@
 
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com/)
-[![LangGraph](https://img.shields.io/badge/LangGraph-StateGraph-orange.svg)](https://langchain-ai.github.io/langgraph/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-StateGraph%20%2B%20HITL-orange.svg)](https://langchain-ai.github.io/langgraph/)
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-Vector_Store-green.svg)](https://www.trychroma.com/)
-[![OpenSpec](https://img.shields.io/badge/Spec--Driven-OpenSpec-purple.svg)](https://github.com/openspec)
+[![Ragas Evals](https://img.shields.io/badge/Ragas-Evals%20%2B%20CI%20Gate-blueviolet.svg)](scripts/evaluate.py)
+[![OpenSpec](https://img.shields.io/badge/Spec--Driven-OpenSpec-purple.svg)](openspec/specs/)
 [![Tests Passing](https://img.shields.io/badge/Tests-117%2F117%20PASS-brightgreen.svg)](tests/)
 [![Challenge Benchmark](https://img.shields.io/badge/Challenge%20Scenarios-10%2F10%20(100%25)-success.svg)](scripts/evaluate.py)
 
-Production-grade **Spec-Driven Multi-Agent Support System** engineered for the **Getnet AI Hardcore Engineer Challenge**. Built with **Python 3.12**, **FastAPI**, **LangGraph**, **ChromaDB**, **LangSmith**, and **OpenSpec**.
+Fintech production-hardened, **Spec-Driven Multi-Agent Support System** engineered for Getnet acquiring & merchant operations. Built with **Python 3.12**, **FastAPI**, **LangGraph** (`interrupt()` + `SqliteSaver`), **ChromaDB**, **Ragas**, **LangSmith**, and **OpenSpec**.
 
 ---
 
-## 🎥 Video Presentation & Walkthrough
+## Production Hardening Highlights (v2 Architecture)
+
+| Banking / Production Requirement | Implemented Engineering Control | Primary Modules |
+| :--- | :--- | :--- |
+| **Access Control & Anti-IDOR (PCI-DSS)** | Signed `HS256` Bearer JWTs + `HttpOnly` browser session cookies, RBAC (`merchant` vs. `operator`/`admin`), strict per-`user_id` tenant isolation | [`src/api/auth.py`](src/api/auth.py), [`src/api/routes.py`](src/api/routes.py) |
+| **Telemetry & Log Redaction (PCI / LGPD)** | Unified masking of 13–19 digit PANs, CVVs, CPFs, CNPJs, and Bearer/API tokens across egress responses, `structlog` JSON logs, and `/traces` | [`src/guardrails/redaction.py`](src/guardrails/redaction.py), [`src/observability/logger.py`](src/observability/logger.py), [`src/observability/tracer.py`](src/observability/tracer.py) |
+| **Anti-Token Maxxing & Abuse Prevention** | Bounded `ChatRequest.message` length (`422`), sliding-window rate limits (`429` + `Retry-After`), daily & per-request token budget caps + alerts | [`src/api/rate_limit.py`](src/api/rate_limit.py), [`src/api/schemas.py`](src/api/schemas.py) |
+| **Obfuscation-Resistant Guardrails** | Unicode `NFKC` + homoglyph/zero-width normalization and base64 payload inspection before prompt-injection and fraud regex checks | [`src/guardrails/validator.py`](src/guardrails/validator.py) |
+| **Quantitative RAG Evaluation & CI Gate** | **Ragas** metrics (`faithfulness`, `answer_relevancy`, `context_precision`, `context_recall`, `hallucination_rate`) with offline deterministic CI fallback and `--enforce-thresholds` | [`scripts/evaluate.py`](scripts/evaluate.py), [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
+| **Real Human-in-the-Loop (HITL) & Persistence** | LangGraph `interrupt()` suspension + `Command(resume=...)` over `SqliteSaver`, SQLite-backed session history, runtime CRM tickets, and `/dashboard` HITL Review Queue | [`src/orchestration/graph.py`](src/orchestration/graph.py), [`src/orchestration/persistence.py`](src/orchestration/persistence.py) |
+| **Container Security** | Non-root `appuser` execution, test/dev files excluded from image, `no-new-privileges`, and persistent runtime/log volumes | [`Dockerfile`](Dockerfile), [`docker-compose.yml`](docker-compose.yml) |
+
+---
+
+## Video Presentation & Walkthrough (v1 Baseline)
 
 [![Getnet Multi-Agent Solution Walkthrough](docs/assets/video-thumbnail.png)](https://drive.google.com/file/d/1MhL4jDibYF79vLd7Dm_1SuRnT12zpLuW/view?usp=sharing)
 
 <p align="center">
-  <em>▶️ <b><a href="https://drive.google.com/file/d/1MhL4jDibYF79vLd7Dm_1SuRnT12zpLuW/view?usp=sharing" target="_blank" rel="noopener noreferrer">Assistir ao Walkthrough da Solução (13 min) no Google Drive</a></b></em>
+  <em><b><a href="https://drive.google.com/file/d/1MhL4jDibYF79vLd7Dm_1SuRnT12zpLuW/view?usp=sharing" target="_blank" rel="noopener noreferrer">Watch the v1 Architecture Walkthrough (13 min) on Google Drive</a></b></em>
 </p>
 
-> **Apresentação em Vídeo da Solução:** Walkthrough guiado de ~13 minutos demonstrando a arquitetura multiagente com 5 agentes em LangGraph, as guardrails bidirecionais de segurança (PCI-DSS & LGPD), a busca híbrida com ChromaDB, os testes automatizados e a demonstração ao vivo no dashboard.
+> **Note:** The video above walks through the **v1** core 5-agent LangGraph design, hybrid ChromaDB RAG, and visual execution tree. Following technical review, the repository was upgraded to **v2** with JWT/RBAC, PCI-DSS telemetry sanitization, Ragas Evals + CI gate, SQLite persistence, and real LangGraph `interrupt()` HITL resumption.
 
 ---
 
-## 1. Architecture Overview, Design Choices & Message Workflow
+## 1. Architecture Overview & Multi-Agent Workflow
 
-The system implements a deterministic, fully observable **5-Agent LangGraph (`StateGraph`) Orchestration** protected by bidirectional security and privacy **Guardrails**, exceeding the challenge baseline of 3 agents and 2 tools:
+The system implements a deterministic, fully observable **5-Agent LangGraph (`StateGraph`) Orchestration** behind an authenticated FastAPI gateway and bidirectional security guardrails:
 
 ```mermaid
 flowchart TD
-    User(["POST /chat\n{message, user_id}"]) --> InGuard["Input Guardrail\n(Prompt Injection & Security Defense)"]
-    InGuard -- "Blocked" --> OutGuard["Output Guardrail\n(PCI-DSS PAN & LGPD CPF Masking)"]
-    InGuard -- "Allowed" --> Router["Agent 1: Router Agent\n(Contextual Rewriting & Intent Classification)"]
+    User(["Client / Browser\nBearer JWT or HttpOnly Cookie"]) --> Gateway["API Security Gateway\n(RBAC, Tenant Isolation, Rate Limit & Token Budget)"]
+    Gateway -- "401 / 403 / 429" --> Reject(["HTTP Error + Operational Alert"])
+    Gateway -- "Authorized" --> InGuard["Input Guardrail\n(NFKC + Base64 Decode + Injection Defense)"]
 
-    Router -- "knowledge" --> Knowledge["Agent 2: Knowledge Agent\n(RAG & Domain Fallback)"]
-    Router -- "customer_support" --> Support["Agent 3: Customer Support Agent\n(Merchant Telemetry & Settlements)"]
-    Router -- "escalation" --> Escalation["Agent 4: Human Escalation Agent\n(Handoff & Priority Queues)"]
+    InGuard -- "Blocked" --> OutGuard["Output Guardrail\n(PCI-DSS PAN/CVV & LGPD CPF/CNPJ Redaction)"]
+    InGuard -- "Allowed" --> Router["Agent 1: Router Agent\n(Query Rewriter, Intent & 3-Tier Risk Classification)"]
+
+    Router -- "knowledge" --> Knowledge["Agent 2: Knowledge Agent\n(3-Layer RAG & Scoped Web Search)"]
+    Router -- "customer_support" --> Support["Agent 3: Customer Support Agent\n(Merchant Settlements, POS & Tickets)"]
+    Router -- "escalation" --> Escalation["Agent 4: Human Escalation Agent\n(LangGraph interrupt + SqliteSaver)"]
     Router -- "hybrid" --> Knowledge
 
     Knowledge <--> KTools[("Knowledge Tools:\n1. retrieve_getnet_knowledge\n2. web_search_general")]
     Support <--> STools[("Support Tools:\n1. get_merchant_settlement_status\n2. diagnose_pos_and_transactions\n3. manage_support_ticket")]
     Escalation <--> ETools[("Escalation Tools:\n1. dispatch_human_handoff\n2. manage_support_ticket")]
 
-    Knowledge --> QueueGate{"Next queued agent\nor Low Confidence & Risk?"}
+    Knowledge --> QueueGate{"Next queued agent\nor Low Conf & Risk?"}
     Support --> QueueGate
 
     QueueGate -- "Next: customer_support" --> Support
     QueueGate -- "Low Conf & High/Medium Risk" --> Escalation
-    QueueGate -- "Complete / Low Risk" --> Personality["Agent 5: Personality Agent\n(Synthesis, Empathy & SSE Token Streaming)"]
+    QueueGate -- "Complete / Low Risk" --> Personality["Agent 5: Personality Agent\n(Synthesis, Empathy & SSE Streaming)"]
 
-    Escalation --> Personality
+    Escalation -- "Paused: interrupt()" --> Checkpoint[("Pending HITL Queue\nGET /handoffs")]
+    Checkpoint -- "POST /handoffs/{thread_id}/resume\nCommand(resume=...)" --> Personality
+
     Personality --> OutGuard
-    OutGuard --> Final(["Structured JSON Response\n+ End-to-End Execution Trace"])
+    OutGuard --> Final(["JSON / SSE Response\n+ Sanitized Trace & Persisted Session"])
 ```
 
 ### Agent Roles & Responsibilities
 
 1. **Agent 1 — Router Agent (`src/agents/router_agent.py`)**:
-   - Primary gateway for all validated requests.
-   - Operates a **Contextual Query Rewriter** (`rewrite_contextual_query`) to resolve elliptical multi-turn inquiries (e.g., *"what about yen?"* or *"quanto custa ela?"*) using prior dialogue context.
-   - Emits a structured Pydantic contract (`RouterPlan`) that determines primary intent (`knowledge`, `customer_support`, `escalation`, `hybrid`, `out_of_scope`) and constructs an ordered execution queue (`agent_queue`).
+   - Primary gateway for validated requests, operating a **Contextual Query Rewriter** (`rewrite_contextual_query`) for elliptical multi-turn follow-ups (e.g., *"what about yen?"*, *"quanto custa ela?"*).
+   - Emits a structured `RouterPlan` classifying intent (`knowledge`, `customer_support`, `escalation`, `hybrid`, `out_of_scope`), ordered `agent_queue`, language (`en`/`pt`), and **3-tier business risk** (`high`, `medium`, `low`) so low-risk informational queries never trigger unnecessary human tickets.
 2. **Agent 2 — Knowledge Agent (`src/agents/knowledge_agent.py`)**:
-   - Resolves Getnet institutional, hardware, and financial queries via **3-Layer RAG** grounded in `https://www.getnet.net/en` and `https://site.getnet.com.br`.
-   - Resolves general external queries (weather forecasts in Porto Alegre, Euro exchange rates) via **Resilient Web Search** (`web_search_general`).
-   - Integrates an **Anti-Hallucination & Epistemic Uncertainty Gate**: if verified evidence is missing, emits `[INSUFFICIENT_EVIDENCE]`, calibrating confidence `< 0.60` to trigger automatic specialist escalation.
+   - Answers Getnet product, hardware, and policy questions via **3-Layer RAG** grounded in `https://www.getnet.net/en` and `https://site.getnet.com.br`.
+   - Handles real-time external queries (Porto Alegre weather, currency FX) via `web_search_general` and enforces an **Anti-Hallucination & Epistemic Uncertainty Gate** (`[INSUFFICIENT_EVIDENCE]`).
 3. **Agent 3 — Customer Support Agent (`src/agents/support_agent.py`)**:
-   - Resolves merchant-specific account and hardware troubleshooting for a given `user_id` (e.g., `cliente1988` - Padaria & Café Bela Vista Ltda).
-   - Equips **3 domain tools**: settlement schedule lookup, POS network telemetry & ISO-8583 decline diagnostics, and technical support ticket management.
-4. **Agent 4 (Bonus) — Human Escalation & Handoff Agent (`src/agents/escalation_agent.py`)**:
-   - Activated on explicit human attendant requests, contested chargebacks, or whenever end-to-end resolution confidence falls below `< 0.60` on High/Medium business risk inquiries (while low-risk informational queries complete with epistemic caveats without opening human tickets).
-   - Dispatches structured handoffs (`ESC-GN-XXXXXX`), opens linked CRM tickets (`TCK-2026-ESC`), and forwards conversation context to Tier-2 specialist desks.
+   - Resolves merchant-specific inquiries strictly scoped to the authenticated `user_id` (`cliente1988`) using **3 domain tools**: settlement lookup, POS/ISO-8583 diagnostics, and SQLite-backed ticket management.
+4. **Agent 4 (Bonus) — Human Escalation & HITL Agent (`src/agents/escalation_agent.py`)**:
+   - Triggered on explicit human requests, contested chargebacks, or confidence `< 0.60` under `high`/`medium` business risk.
+   - Dispatches handoff protocols (`ESC-GN-XXXXXX`), creates persistent tickets (`TCK-2026-XXXXXX`), and **suspends graph execution via LangGraph `interrupt()`** under `thread_id` (`SqliteSaver` checkpoint). Resumes via `Command(resume=...)` when an operator submits a decision on `POST /handoffs/{thread_id}/resume`.
 5. **Agent 5 — Personality & Output Synthesis Agent (`src/agents/personality_agent.py`)**:
-   - Synthesizes findings from upstream domain agents into an empathetic, brand-aligned response in the merchant's language (`en` or `pt`).
-   - Supports real-time Server-Sent Events (SSE) token-by-token streaming at `POST /chat/stream`.
+   - Synthesizes specialist findings and operator resolutions into empathetic, brand-aligned responses in the merchant's language (`en` or `pt`), supporting SSE streaming via `POST /chat/stream`.
 
 ---
 
-## 2. How We Leveraged LLM Tools
+## 2. How LLM Tools Are Engineered
 
-Rather than letting LLMs hallucinate tools or execute unstructured calls, the system enforces **strict software engineering principles around tool design**:
-
-1. **Typed Pydantic Schemas & Decoupled Execution:**
-   - Every tool is implemented as an isolated, deterministic Python function wrapped with LangChain's `@tool` decorator with full type hints and docstrings.
-   - Tools can be executed independently by unit tests without launching an LLM, guaranteeing zero-flake testing and deterministic offline fallback.
-2. **Domain-Specific Tool Inventory:**
-   - `retrieve_getnet_knowledge(query, top_k)`: Queries persistent ChromaDB vector store with hybrid concept + n-gram similarity.
-   - `web_search_general(query)`: Multi-provider search (Open-Meteo Weather API with local timezone resolution, European Central Bank Frankfurter API, AwesomeAPI, DuckDuckGo, Tavily, and Wikipedia Action API) filtered through an *Attributed Citations Gate*.
-   - `get_merchant_settlement_status(user_id)`: Fetches yesterday's gross/net sales, settlement payout date (`D+1` vs `D+2`), deposit time windows, and masked bank accounts.
-   - `diagnose_pos_and_transactions(user_id, issue_type)`: Inspects terminal hardware status, Wi-Fi 2.4GHz vs 5GHz band conflicts, 4G SIM APN session states, and ISO-8583 decline codes (e.g., Code 51 — Insufficient Funds).
-   - `manage_support_ticket(user_id, issue_summary, action)`: Opens and checks technical assistance and terminal replacement tickets.
-   - `dispatch_human_handoff(user_id, reason, conversation_summary, priority)`: Routes requests to Tier-2 support queues with protocol tracking.
-3. **Trace Instrumentation & Observability:**
-   - Every tool call is automatically captured inside a timed `TraceSpan` with inputs, outputs, execution duration, and token usage metrics recorded in `ExecutionTrace`.
+1. **Typed Pydantic Contracts & Deterministic Fallbacks:** Every tool in `src/tools/` is a pure, typed Python function wrapped with `@tool` so unit tests and offline CI run deterministically without external LLM flakes.
+2. **Tool Inventory:**
+   - `retrieve_getnet_knowledge(query, top_k)`: Queries ChromaDB with hybrid domain-concept + n-gram similarity.
+   - `web_search_general(query)`: Multi-provider search (Open-Meteo with local timezone resolution, Frankfurter ECB, AwesomeAPI, DuckDuckGo, Tavily, Wikipedia) filtered through an *Attributed Citations Gate*.
+   - `get_merchant_settlement_status(user_id)`: Retrieves gross/net sales, `D+1`/`D+2` deposit windows, and masked bank accounts.
+   - `diagnose_pos_and_transactions(user_id, issue_type)`: Inspects terminal hardware, Wi-Fi 2.4GHz/4G APN telemetry, and ISO-8583 decline codes (e.g., Code 51).
+   - `manage_support_ticket(user_id, issue_summary, action)`: Persists and queries technical assistance tickets in SQLite.
+   - `dispatch_human_handoff(user_id, reason, conversation_summary, priority)`: Generates priority Tier-2 escalation protocols linked to HITL checkpoints.
 
 ---
 
 ## 3. RAG Pipeline (`Ingestion → Storage → Retrieval → Generation`)
 
-The Retrieval-Augmented Generation pipeline is built across 4 distinct layers:
-
 ```mermaid
 flowchart LR
-    A["Layer 1: Ingestion\n(Live Scraper + Curated Markdown)"] --> B["Layer 2: Storage\n(ChromaDB + Hybrid Embeddings)"]
+    A["Layer 1: Ingestion\n(Live Scraper + Curated Corpus)"] --> B["Layer 2: Storage\n(ChromaDB + Hybrid Embeddings)"]
     B --> C["Layer 3: Retrieval\n(Top-k Cosine + Concept Rerank)"]
     C --> D["Layer 4: Grounded Generation\n(Anti-Hallucination & Citations)"]
     C -. "Similarity < 0.35" .-> E["Dynamic Fallback\n(Live Scoped Domain Search)"]
     E --> D
 ```
 
-1. **Ingestion (`src/rag/ingest.py` & `scripts/ingest_kb.py`)**:
-   - **Multi-URL Live Scraper**: Uses `httpx` and `BeautifulSoup4` to parse `https://www.getnet.net/en`, `https://site.getnet.com.br/maquininhas/`, `https://site.getnet.com.br/link-de-pagamento/`, and `https://site.getnet.com.br/duvidas/`.
-   - **Curated Ground-Truth Corpus (`data/knowledge_base/getnet_products.md`)**: Verified knowledge covering the full terminal portfolio (*Get Tap*, *Get Mini*, *Get Lite*, *Get Clássica*, *Get Smart*), *Pix* bank domicile rules, *Antecipação de Recebíveis* (Automatic *Plano Receba Já* and Punctual), *Crediário* (up to **48 installments** with D+2 merchant payout), and *Payment Link (GetPay)* on WhatsApp.
-   - **Semantic Chunking**: Splits sections by markdown headers and recursive paragraph overlap (`chunk_size=1450`, `chunk_overlap=180`), preserving provenance metadata (`source_url`, `title`, `section`, `product_tag`).
-2. **Storage (`src/rag/vector_store.py`)**:
-   - Persisted into **ChromaDB** (`data/chroma_db`) with `GetnetHybridEmbeddingFunction` (128-dimensional deterministic bilingual domain vector mapping payment concepts and hashed n-grams) plus optional `OpenAIEmbeddings` (`text-embedding-3-small`).
-3. **Retrieval & Layer-3 Dynamic Fallback (`src/tools/knowledge_tools.py`)**:
-   - Retrieves top-$k$ ($k=4$) chunks ranked by hybrid cosine similarity and lexical domain overlap boost.
-   - **Corrective Domain Fallback**: If query similarity falls below `< 0.35` (e.g., newly launched products or historical events), the system automatically triggers a domain-scoped live search (`site:site.getnet.com.br OR site:getnet.net`).
-4. **Grounded Generation (`src/agents/knowledge_agent.py`)**:
-   - Answers are strictly synthesized from retrieved chunks with verified URLs attached to the response payload.
+1. **Ingestion (`src/rag/ingest.py`, `scripts/ingest_kb.py`):** Live scraping (`httpx` + `BeautifulSoup4`) of Getnet URLs plus curated corpus (`data/knowledge_base/getnet_products.md`) covering *Get Tap*, *Get Mini*, *Get Lite*, *Get Clássica*, *Get Smart*, *Pix*, *Antecipação*, *Crediário* (up to 48x, D+2), and *Payment Link (GetPay)* (`chunk_size=1450`, `chunk_overlap=180`).
+2. **Storage (`src/rag/vector_store.py`):** Persistent ChromaDB (`data/chroma_db`) with `GetnetHybridEmbeddingFunction` (128-dim bilingual domain + n-gram embeddings) and optional `OpenAIEmbeddings`.
+3. **Retrieval & Fallback (`src/tools/knowledge_tools.py`):** Top-$k$ ($k=4$) retrieval with corrective domain-scoped live search fallback when similarity `< 0.35`.
+4. **Grounded Generation (`src/agents/knowledge_agent.py`):** Direct entailment rules prevent fabrication of unlisted products or unverified facts, attaching verified source URLs and `retrieved_contexts` for Ragas scoring.
 
 ---
 
-## 4. Spec-Driven Development & Development Timeline
+## 4. Spec-Driven Development Lifecycle (OpenSpec)
 
-Following the challenge guidelines (*"Use Spec Driven Development, and spend at most 60 min of screen time to develop the core-solution"*), the project lifecycle was organized into two deliberate phases:
+All capabilities and production hardenings are governed by formal specs under [`openspec/specs/`](openspec/specs/) and archived changes under [`openspec/changes/archive/`](openspec/changes/archive/):
 
-1. **Phase 1 — Core Solution (Completed within 60 min screen time):**
-   - Specification of contracts and architectures via OpenSpec in `openspec/specs/`.
-   - Core 3-agent orchestration (`Router`, `Knowledge`, `Customer Support`) implemented with LangGraph.
-   - Core FastAPI `POST /chat` endpoint handling incoming payloads.
-   - Local RAG vector store and baseline support tools operational.
-2. **Phase 2 — Enterprise Hardening & Bonus Engineering:**
-   - **Security & Privacy Guardrails**: Prompt-injection ingress defense and egress PCI-DSS PAN / LGPD CPF masking.
-   - **Quality & Testing**: 100 automated unit and integration tests with 100% pass rate.
-   - **Observability & Reliability**: Multi-tier dynamic SLO latency alerting, LangSmith tracing, and token usage accounting.
-   - **Bonus Agents & UX**: 4th Human Escalation Agent, 5th Personality Agent with SSE streaming, and the interactive `/dashboard`.
+1. **Phase 1 — Core Solution:** 3 core agents, `POST /chat`, ChromaDB RAG, and Docker packaging (`2026-10-25-multi-agent-support-system`).
+2. **Phase 2 — Risk-Tier Escalation, Authentic RAG & Tree Dashboard:** 3-tier business risk gating (`2026-10-29-escalation-gating-by-risk-tier`), LangSmith experiments, and hierarchical DAG dashboard (`2026-11-19-authentic-rag-langsmith-and-tree-dashboard`).
+3. **Phase 3 — Fintech Production Hardening (`2026-11-19-getnet-feedback-hardening`):** JWT/RBAC & anti-IDOR (`api-security-rbac`), PCI-DSS log/trace redaction, rate/token-budget governance, Ragas evaluation + CI gate, real LangGraph `interrupt()` HITL + SQLite persistence, and non-root Docker hardening.
 
 ---
 
 ## 5. How to Build, Configure, and Run
 
-### Option A: Run with Docker Compose (Recommended)
+### Option A: Docker Compose (Recommended for Production)
 
 ```bash
-# 1. (Recommended) Copy .env.example to .env and configure your OPENAI_API_KEY / LANGCHAIN_API_KEY
+# 1. Copy .env.example to .env and configure AUTH_JWT_SECRET, AUTH_BOOTSTRAP_API_KEY, and optional OPENAI_API_KEY
 cp .env.example .env
 
-# 2. Build and start the service in background
+# 2. Build and start the hardened non-root container with persistent ./data/runtime and ./logs volumes
 docker compose up --build -d
 
 # 3. Verify container health
 curl http://localhost:8000/health
 ```
 
-### Option B: Run with Standard Docker Commands
+### Option B: Standard Docker Build (Non-Root Verification)
 
 ```bash
-# Build the production image (pre-seeds persistent ChromaDB during build)
 docker build -t getnet-multi-agent-support .
-
-# Run container on port 8000
+docker run --rm getnet-multi-agent-support id   # verifies non-root uid/gid (appuser)
 docker run --rm -p 8000:8000 --env-file .env.example getnet-multi-agent-support
 ```
 
-### Option C: Run Locally with Python 3.12 (`uv` or `venv`)
+### Option C: Local Python 3.12 (`uv` / `.venv`)
 
-```bash
+```powershell
 # 1. Create virtual environment and install dependencies
 uv venv --python 3.12 .venv
-uv pip install --python .venv/Scripts/python.exe -r requirements.txt
+uv pip install --python .\.venv\Scripts\python.exe -r requirements.txt
 
 # 2. Seed/verify the ChromaDB knowledge base
-.venv/Scripts/python.exe scripts/ingest_kb.py --skip-live-scrape
+.\.venv\Scripts\python.exe scripts/ingest_kb.py --skip-live-scrape
 
 # 3. Start the FastAPI application
-.venv/Scripts/uvicorn.exe src.main:app --host 0.0.0.0 --port 8000
+.\.venv\Scripts\python.exe -m uvicorn src.main:app --host 127.0.0.1 --port 8000
 ```
+
+> **Opening `/dashboard` in a Browser:** Navigate to `http://127.0.0.1:8000/dashboard`. Unauthenticated browser requests receive a `401` sign-in console; enter **Bootstrap Key** `getnet-bootstrap-operator-key` (or the value in your `.env`) to establish an `HttpOnly` operator session cookie.
 
 ---
 
 ## 6. API Endpoints, Security (JWT/RBAC) & Contract
 
-Once running on `http://localhost:8000`, the application exposes role-protected endpoints (Bearer JWT `HS256` with `merchant`, `operator`, and `admin` roles, multi-tenant `user_id` isolation, sliding-window rate limiting, and daily token budget caps):
-
 | Method | Endpoint | Access / Role | Description |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/auth/token` | Public (dev) / `X-Bootstrap-Key` (elevated/prod) | Issue a scoped Bearer JWT (`merchant`, `operator`, `admin`) |
-| `POST` | `/chat` (aliases: `/`, `/api/v1/message`) | Authenticated (`merchant` own `user_id` / `operator`) | Main multi-agent endpoint accepting `{"message": "...", "user_id": "..."}` (`max_length` bounded) |
+| `POST` | `/auth/token` | Public (dev `merchant`) / `X-Bootstrap-Key` (elevated/prod) | Issue a signed `HS256` Bearer JWT (`merchant`, `operator`, `admin`) |
+| `POST` | `/auth/session` / `/auth/logout` | Bootstrap key or Operator JWT / Public | Create or clear an `HttpOnly` cookie session for browser ops UI |
+| `POST` | `/chat` (aliases: `/`, `/api/v1/message`) | Authenticated (`merchant` own `user_id` / `operator`) | Multi-agent orchestration (`max_length`, rate-limit & token-budget guarded) |
 | `POST` | `/chat/stream` | Authenticated (`merchant` own `user_id` / `operator`) | SSE streaming node lifecycle, token chunks, and `interrupt` HITL events |
 | `GET` / `DELETE` | `/chat/history/{user_id}` | Authenticated (`merchant` own `user_id` / `operator`) | Retrieve or clear SQLite-persisted conversational history |
 | `GET` | `/handoffs` | `operator` / `admin` | List pending (`pending_human_review`) and resolved HITL checkpoints |
 | `POST` | `/handoffs/{thread_id}/resume` | `operator` / `admin` | Resume a paused LangGraph `interrupt()` checkpoint via `Command(resume=...)` |
-| `GET` | `/dashboard` (also `/`) | `operator` / `admin` | Interactive Visual Explainer, Live Observability & HITL Review Queue UI |
-| `GET` | `/health` | Public | Liveness and readiness probe reporting vector store chunks count |
-| `GET` | `/metrics` | `operator` / `admin` | Operational metrics (average/p95 latency, agent/tool counters, guardrail blocks) |
-| `GET` | `/alerts` | `operator` / `admin` | Production alerts (`HIGH_LATENCY_ALERT`, `SECURITY_GUARDRAIL_ALERT`, `HUMAN_HANDOFF_ALERT`, `RATE_LIMIT_ALERT`, `TOKEN_BUDGET_ALERT`) |
+| `GET` | `/dashboard` (also `/`) | `operator` / `admin` (cookie or Bearer) | Interactive Visual Explainer, Live Observability & HITL Review Queue UI |
+| `GET` | `/health` | Public | Liveness and readiness probe reporting vector store chunk count |
+| `GET` | `/metrics` | `operator` / `admin` | Aggregated latency, agent/tool counters, and guardrail/handoff stats |
+| `GET` | `/alerts` | `operator` / `admin` | Production alerts (`HIGH_LATENCY`, `SECURITY_GUARDRAIL`, `HUMAN_HANDOFF`, `RATE_LIMIT`, `TOKEN_BUDGET`) |
 | `GET` | `/traces` / `/traces/{trace_id}` | `operator` / `admin` | Sanitized execution traces and span inspector |
-| `POST` | `/evals/run` | `operator` / `admin` | Trigger Ragas quantitative evaluation benchmark and return scorecard |
+| `POST` | `/evals/run` | `operator` / `admin` | Execute Ragas quantitative evaluation benchmark and return scorecard |
 | `GET` | `/docs` | Public | Interactive Swagger / OpenAPI documentation |
 
-### Sample Authenticated `cURL` Flow
+### Sample Authenticated Flow (PowerShell / `cURL`)
 
 ```bash
 # 1. Mint a merchant Bearer JWT scoped to cliente1988
@@ -209,16 +202,16 @@ TOKEN=$(curl -s -X POST http://localhost:8000/auth/token \
   -H "Content-Type: application/json" \
   -d '{"user_id": "cliente1988", "role": "merchant"}' | python -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
-# 2. Query the multi-agent API with Bearer auth
+# 2. Query the multi-agent API (cross-tenant user_id returns 403 Forbidden)
 curl -X POST http://localhost:8000/chat \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"message": "What'\''s the difference between the Get Clássica and the Get Smart?", "user_id": "cliente1988"}'
 
-# 3. Resume a paused HITL handoff as an operator (using X-Bootstrap-Key to mint operator token)
+# 3. Mint an operator token and resume a paused HITL handoff
 OP_TOKEN=$(curl -s -X POST http://localhost:8000/auth/token \
   -H "Content-Type: application/json" \
-  -H "X-Bootstrap-Key: $AUTH_BOOTSTRAP_API_KEY" \
+  -H "X-Bootstrap-Key: getnet-bootstrap-operator-key" \
   -d '{"user_id": "operator_1", "role": "operator"}' | python -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
 curl -X POST http://localhost:8000/handoffs/<thread_id>/resume \
@@ -236,10 +229,13 @@ curl -X POST http://localhost:8000/handoffs/<thread_id>/resume \
   "routed_agents": ["router_agent", "knowledge_agent", "personality_agent"],
   "tools_used": ["retrieve_getnet_knowledge"],
   "sources": ["https://site.getnet.com.br/maquininhas/"],
-  "confidence_score": 0.95,
+  "confidence_score": 0.923,
   "guardrail_triggered": false,
   "handoff_required": false,
-  "trace_id": "trc-3843e2206eeb",
+  "handoff_status": "none",
+  "thread_id": "thr-trc-b44deac865ba",
+  "human_decision": null,
+  "trace_id": "trc-b44deac865ba",
   "latency_ms": 110.35,
   "effective_slo_target_ms": 7000.0,
   "slo_tier": "fast_path",
@@ -250,140 +246,119 @@ curl -X POST http://localhost:8000/handoffs/<thread_id>/resume \
 
 ---
 
-## 7. Testing Strategy & Challenge Scenarios Verification
+## 7. Testing Strategy, Ragas Evals & CI Quality Gate
 
-### Automated Test Pyramid
+### Automated Test Pyramid (`117/117` Passing)
 
-The test suite covers **117 automated tests** structured across 3 tiers:
-
-1. **Unit Tests (`tests/unit/`)**:
+1. **Unit Tests (`tests/unit/`):**
    - `test_auth_and_rate_limit.py`: JWT creation/expiry (`401`), RBAC (`403`), anti-IDOR tenant isolation, message `max_length` (`422`), sliding-window rate limits (`429`), and daily token budget caps.
    - `test_router.py`: Intent classification, multi-intent hybrid routing, query rewriting, and 3-tier business risk classification (`high`, `medium`, `low`).
-   - `test_orchestrator.py`: LangGraph dispatching, risk-gated conditional escalation, and `interrupt()` / `Command(resume=...)` HITL lifecycle.
-   - `test_rag.py`: Markdown parser, semantic chunking, ChromaDB indexing, top-$k$ retrieval accuracy.
-   - `test_tools.py`: All 6 LangChain tools (settlement, POS telemetry, SQLite-backed tickets, handoff, RAG, weather, FX).
-   - `test_guardrails.py`: Normalized/base64 prompt injection blocking and egress PCI PAN / CVV / CPF / CNPJ / Bearer masking.
-   - `test_observability.py`: Trace recording, log/trace PCI sanitization, Ragas quantitative metrics & thresholds, multi-tier dynamic SLO evaluation, and alerting rules.
-   - `test_session_memory.py`: SQLite-backed session store, ring-buffer pruning, contextual dialogue history.
-2. **API Contract Tests (`tests/integration/test_api_endpoints.py`)**:
-   - Validates HTTP contracts for `/auth/token`, `/auth/session`, `/auth/logout`, `/chat`, `/chat/stream`, `/handoffs`, `/handoffs/{thread_id}/resume`, `/health`, `/metrics`, `/alerts`, `/traces/{id}`, `/evals/run`, and `/dashboard`.
-3. **End-to-End Challenge Scenario Tests (`tests/integration/test_challenge_scenarios.py`)**:
-   - Directly executes the 10 official challenge scenarios + bonus cases from `data/eval_dataset.json`.
+   - `test_orchestrator.py`: Risk-gated conditional escalation and end-to-end LangGraph `interrupt()` / `Command(resume=...)` HITL lifecycle.
+   - `test_rag.py`: Markdown chunking, ChromaDB indexing, top-$k$ retrieval accuracy.
+   - `test_tools.py`: All 6 LangChain tools plus SQLite ticket reload persistence.
+   - `test_guardrails.py`: Normalized/base64 prompt-injection blocking and PCI PAN / CVV / CPF / CNPJ / Bearer redaction.
+   - `test_observability.py`: Trace spans, log/trace PCI sanitization, Ragas metrics & threshold gates, multi-tier dynamic SLOs, and alerting rules.
+   - `test_session_memory.py`: SQLite-backed session memory persistence across reloads and ring-buffer pruning.
+2. **API Contract Tests (`tests/integration/test_api_endpoints.py`):**
+   - Validates `/auth/token`, `/auth/session`, `/auth/logout`, `/chat`, `/chat/stream`, `/handoffs`, `/handoffs/{thread_id}/resume`, `/health`, `/metrics`, `/alerts`, `/traces/{id}`, `/evals/run`, `/dashboard`, and favicons (`200`, `401`, `403`, `404`, `409`, `422`, `429`).
+3. **End-to-End Challenge Scenarios (`tests/integration/test_challenge_scenarios.py` & `test_multi_turn_chat.py`):**
+   - Verifies all 10 official challenge scenarios + hybrid, HITL escalation, guardrail adversarial, and multi-turn contextual follow-up chains.
 
-### Official 10 Challenge Scenarios Validation Matrix
+### Ragas Evaluation Scorecard (`scripts/evaluate.py --enforce-thresholds`)
 
-| # | Official Challenge Scenario | Routed Agents | Tool Used | Ingestion / Grounding Source | Test Status |
-| :-: | :--- | :--- | :--- | :--- | :-: |
-| **01** | *"What's the difference between the Get Clássica and the Get Smart?"* | Router $\to$ Knowledge $\to$ Personality | `retrieve_getnet_knowledge` | `site.getnet.com.br/maquininhas/` | **PASSED** |
-| **02** | *"What's the weather forecast in Porto Alegre tomorrow?"* | Router $\to$ Knowledge $\to$ Personality | `web_search_general` | Open-Meteo Weather API | **PASSED** |
-| **03** | *"When will the money from yesterday's sales be deposited?"* | Router $\to$ Support $\to$ Personality | `get_merchant_settlement_status` | `data/merchants.json` (Settlement Engine) | **PASSED** |
-| **04** | *"Do I need a bank account to receive my sales via Pix?"* | Router $\to$ Knowledge $\to$ Personality | `retrieve_getnet_knowledge` | `site.getnet.com.br/duvidas/` | **PASSED** |
-| **05** | *"My card machine won't connect to the internet, what should I do?"* | Router $\to$ Support $\to$ Personality | `diagnose_pos_and_transactions` | `data/merchants.json` (POS Telemetry) | **PASSED** |
-| **06** | *"How does receivables advance (antecipação) work with Getnet?"* | Router $\to$ Knowledge $\to$ Personality | `retrieve_getnet_knowledge` | `site.getnet.com.br/antecipacao-de-recebiveis/` | **PASSED** |
-| **07** | *"What's the euro exchange rate today?"* | Router $\to$ Knowledge $\to$ Personality | `web_search_general` | European Central Bank / Frankfurter API | **PASSED** |
-| **08** | *"My card machine is showing a transaction decline error."* | Router $\to$ Support $\to$ Personality | `diagnose_pos_and_transactions` | `data/merchants.json` (ISO-8583 Code 51 Switch) | **PASSED** |
-| **09** | *"How many installments can I split a sale into with the crediário?"* | Router $\to$ Knowledge $\to$ Personality | `retrieve_getnet_knowledge` | `site.getnet.com.br/duvidas/crediario/` | **PASSED** |
-| **10** | *"Can I sell through WhatsApp using the Payment Link?"* | Router $\to$ Knowledge $\to$ Personality | `retrieve_getnet_knowledge` | `site.getnet.com.br/link-de-pagamento/` | **PASSED** |
+Verified across all 13 scenarios in `data/eval_dataset.json` (`offline_deterministic` CI mode; switches to `ragas_live` automatically when `OPENAI_API_KEY` is configured):
 
-### How to Run Tests & Quantitative Ragas Evaluation Benchmark
+| Metric | Measured Result | CI Gate / Target |
+| :--- | :---: | :---: |
+| **Official 10 Challenge Scenarios** | **10 / 10** | `10 / 10` |
+| **Routing Accuracy** | **100.0%** | `100.0%` |
+| **Tool Selection Accuracy** | **100.0%** | `100.0%` |
+| **Rubric Groundedness** | **100.0%** | `100.0%` |
+| **Ragas Faithfulness** | **0.9284** | $\ge 0.7000$ |
+| **Ragas Answer Relevancy** | **0.9273** | Monitored |
+| **Ragas Context Precision** | **1.0000** | Monitored |
+| **Ragas Context Recall** | **0.8328** | Monitored |
+| **Hallucination Rate** (`1 - Faithfulness`) | **0.0716** | $\le 0.3000$ |
 
-```bash
-# Run complete unit & integration test suite (117 passed)
-.venv/Scripts/python.exe -m pytest -v
+```powershell
+# Run full test suite (117 passed)
+.\.venv\Scripts\python.exe -m pytest -v
 
-# Run automated evaluation benchmark CLI with Ragas metrics and CI threshold gate
-.venv/Scripts/python.exe scripts/evaluate.py --enforce-thresholds
+# Run Ragas evaluation benchmark with CI threshold enforcement
+.\.venv\Scripts\python.exe scripts/evaluate.py --enforce-thresholds
+
+# Validate all OpenSpec specifications strictly
+openspec validate --all --strict
 ```
 
-The evaluation runner (`scripts/evaluate.py` and `POST /evals/run`) computes **Ragas** quantitative metrics (`faithfulness`, `answer_relevancy`, `context_precision`, `context_recall`, and `hallucination_rate = 1 - faithfulness`) in live LLM mode when `OPENAI_API_KEY` is configured, or via deterministic groundedness scoring (`offline_deterministic`) in offline CI runs (`.github/workflows/ci.yml`).
+Automated CI runs on every push/PR via [`.github/workflows/ci.yml`](.github/workflows/ci.yml) executing `pytest`, `scripts/evaluate.py --enforce-thresholds`, and `openspec validate --all --strict`.
 
 ---
 
-## 8. Observability, Security, HITL & Guardrail Trade-offs
+## 8. Interactive Visual Dashboard (`GET /dashboard`)
 
-1. **Authentication, RBAC & Anti-IDOR (`src/api/auth.py`):**  
-   Signed `HS256` Bearer JWTs enforce `merchant` vs. `operator`/`admin` roles and bind `merchant` tokens strictly to their own `user_id` on `/chat`, `/chat/stream`, and `/chat/history/{user_id}`.
-2. **Anti-Token Maxxing & Rate Limiting (`src/api/rate_limit.py`):**  
-   Sliding-window rate limits (`429 Too Many Requests` + `Retry-After`), `ChatRequest.message` `max_length`, and per-user daily/per-request token caps prevent cost-amplification abuse and emit `RATE_LIMIT_ALERT` / `TOKEN_BUDGET_ALERT`.
-3. **Structured JSON Logging & PCI-DSS Sanitization (`src/guardrails/redaction.py`):**  
-   `structlog` processors and `TraceRecorder` mask 13–19 digit PANs, CVVs, CPFs/CNPJs, and Bearer/API keys before logs, spans, or trace previews are emitted or persisted.
-4. **Real Human-in-the-Loop (`interrupt()` + SQLite Checkpointer):**  
-   High/medium-risk escalations and explicit human requests suspend execution inside `escalation_agent` via LangGraph `interrupt()` backed by `SqliteSaver` (`MemorySaver` in `:memory:` mode), resuming cleanly via `Command(resume=...)` at `POST /handoffs/{thread_id}/resume` or the `/dashboard` HITL Review Queue. Low-risk informational queries with low confidence complete without escalation (`escalation-gating-by-risk-tier`).
-5. **Guardrails Normalization & Latency Trade-off (`src/guardrails/validator.py`):**  
-   Ingress validation applies Unicode `NFKC` + homoglyph normalization and decodes candidate base64 payloads before regex inspection, adding sub-millisecond overhead without an external classifier call (a lightweight secondary LLM guardrail can be layered in front if paraphrase-heavy adversarial traffic increases).
-6. **Hardened Container & Persistent SQLite State (`Dockerfile`, `docker-compose.yml`):**  
-   The runtime image runs as non-root `appuser`, excludes test suites, mounts persistent `./data/runtime` and `./logs` volumes, and persists sessions, support tickets, and HITL checkpoints in SQLite.
+Access `http://localhost:8000/dashboard` in your browser (authenticated via operator Bootstrap Key or Bearer JWT):
+
+- **Operator Security & HITL Review Queue:** View paused `interrupt()` threads (`pending_human_review`), enter specialist guidance notes, and click **Approve & Resume** directly from the UI (`POST /handoffs/{thread_id}/resume`), or sign out via `POST /auth/logout`.
+- **Scenario Console & Live Tree Map:** One-click presets for all 10 official scenarios + hybrid, security, and HITL escalation flows streaming live SSE node states.
+- **Latency & Multi-Tier SLO Chart:** Dynamic SVG chart tracking Fast Path ($\le 7\text{s}$) and Complex Path ($\le 18\text{s}$) SLOs alongside token usage and trace spans.
 
 ---
 
-## 9. Interactive Visual Dashboard (`GET /dashboard`)
+## 9. Architectural Trade-Offs
 
-Access `http://localhost:8000/dashboard` in your browser for a self-contained visual console:
-
-- **Scenario Console:** One-click presets for all 10 official challenge scenarios + hybrid, security, and human handoff cases.
-- **Interactive Flow Tree Map:** Visualizes request progress in real time through Guardrails, Router Agent, Domain Specialists, and Synthesis.
-- **Latency & SLO Chart:** Dynamic SVG scatter/bar chart rendering request latencies against Fast and Deep SLO thresholds.
-- **Real-Time Token & Span Inspector:** Displays execution traces, spans, and token consumption directly in the UI.
+- **Self-Contained Auth & SQLite Persistence vs. External Infra:** Signed `HS256` JWTs + `HttpOnly` cookies and SQLite WAL persistence (`SqliteSaver`, `SessionStore`, `TicketStore`, `HandoffStore`) give zero-external-dependency container startup while keeping clean repository boundaries ready for an external IdP (Keycloak/Okta) or Postgres/Redis in multi-replica deployments.
+- **Normalized Regex Guardrails vs. Secondary Guard LLM:** Ingress validation applies Unicode `NFKC` + homoglyph/zero-width normalization and base64 decoding at sub-millisecond latency without extra token spend; a lightweight classifier can be layered in front if paraphrase-heavy adversarial traffic increases.
 
 ---
 
 ## 10. Repository File Structure
 
 ```text
-getnet/
-├── Dockerfile                     # Container definition with ChromaDB pre-seeding & healthcheck
-├── docker-compose.yml             # Container orchestration on port 8000 with volume logs
-├── pyproject.toml                 # Package configuration, hatchling build, and pytest options
-├── requirements.txt               # Pinned Python production and development dependencies
-├── README.md                      # Comprehensive system documentation and architecture guide
+getnet-multi-agent/
+├── .github/workflows/ci.yml        # CI pipeline: pytest + Ragas --enforce-thresholds + OpenSpec strict check
+├── Dockerfile                      # Non-root (appuser) container with pre-seeded ChromaDB & healthcheck
+├── docker-compose.yml              # Production compose with persistent ./data/runtime & ./logs volumes
+├── pyproject.toml                  # Package metadata, dependencies, and pytest configuration
+├── requirements.txt                # Pinned Python dependencies (FastAPI, LangGraph, Ragas, PyJWT, etc.)
+├── README.md                       # System architecture, security, Ragas, and runbook documentation
 ├── data/
-│   ├── chroma_db/                 # Persistent ChromaDB vector index files
-│   ├── eval_dataset.json          # 10 official challenge scenarios + bonus evaluation dataset
-│   ├── merchants.json             # Mock merchant database (cliente1988 telemetry & settlements)
+│   ├── chroma_db/                  # Persistent ChromaDB vector index
+│   ├── eval_dataset.json           # 10 official scenarios + hybrid, HITL, and adversarial cases + references
+│   ├── merchants.json              # Mock merchant telemetry & settlements (cliente1988)
 │   └── knowledge_base/
-│       └── getnet_products.md     # Curated ground-truth corpus for all 5 Getnet terminal models & rules
-├── openspec/                      # Spec-Driven Development (SDD) specifications and task archives
-│   └── specs/
-│       ├── agent-orchestration/   # LangGraph workflow specifications
-│       ├── knowledge-rag/         # RAG pipeline specifications
-│       ├── customer-support/      # Support tools specifications
-│       ├── guardrails-escalation/ # Security & handoff specifications
-│       └── api-observability/     # API contracts & metrics specifications
+│       └── getnet_products.md      # Curated ground-truth corpus for Getnet POS lineup & rules
+├── openspec/
+│   ├── specs/                      # 6 canonical specs (incl. api-security-rbac, guardrails-escalation, api-observability)
+│   └── changes/archive/            # Archived OpenSpec proposals, designs, deltas, and completed tasks
 ├── scripts/
-│   ├── evaluate.py                # Evaluation benchmark CLI & LangSmith Experiment runner
-│   └── ingest_kb.py               # ChromaDB knowledge base ingestion and live scraper script
+│   ├── evaluate.py                 # Ragas quantitative evaluation CLI & LangSmith Experiment runner
+│   └── ingest_kb.py                # ChromaDB ingestion and live Getnet domain scraper
 ├── src/
-│   ├── main.py                    # FastAPI application initialization and startup lifecycle
-│   ├── agents/
-│   │   ├── router_agent.py        # Agent 1: Router with Contextual Query Rewriter
-│   │   ├── knowledge_agent.py     # Agent 2: Knowledge Agent (RAG + Web Search)
-│   │   ├── support_agent.py       # Agent 3: Customer Support Agent (3 domain tools)
-│   │   ├── escalation_agent.py    # Agent 4: Human Escalation & Priority Handoff Agent
-│   │   └── personality_agent.py   # Agent 5: Personality Synthesis & Token Streaming Agent
+│   ├── main.py                     # FastAPI application entrypoint and lifespan hooks
+│   ├── agents/                     # 5 LangGraph agents (router, knowledge, support, escalation, personality)
 │   ├── api/
-│   │   ├── routes.py              # HTTP endpoints (/chat, /chat/stream, /health, /metrics, etc.)
-│   │   ├── schemas.py             # Pydantic request/response validation models
-│   │   └── dashboard.py           # Self-contained HTML Visual Explainer & Observability UI
-│   ├── config/
-│   │   └── settings.py            # Centralized typed settings via Pydantic Settings
+│   │   ├── auth.py                 # HS256 JWT issuance/verification, RBAC, anti-IDOR & HttpOnly cookie auth
+│   │   ├── rate_limit.py           # Sliding-window rate limiter & daily/request token budget tracker
+│   │   ├── routes.py               # Protected HTTP endpoints (/auth/*, /chat*, /handoffs*, /traces*, /evals/run)
+│   │   ├── schemas.py              # Pydantic request/response contracts & HandoffResumeRequest
+│   │   └── dashboard.py            # Operator login gate + interactive Visual Explainer & HITL Queue UI
+│   ├── config/settings.py          # Typed Pydantic Settings (auth, budgets, SQLite paths, Ragas thresholds)
 │   ├── guardrails/
-│   │   └── validator.py           # Input prompt-injection defense & Output PCI/LGPD masking
+│   │   ├── redaction.py            # Shared PCI-DSS PAN/CVV, LGPD CPF/CNPJ & Bearer secret sanitizer
+│   │   └── validator.py            # Unicode/base64-normalized ingress guardrail & egress PII redaction
 │   ├── observability/
-│   │   ├── logger.py              # Structured JSON logging with Structlog contextvars
-│   │   └── tracer.py              # Execution trace recorder, metrics & production alerting
+│   │   ├── logger.py               # Structlog JSON logger with automatic PII sanitization processor
+│   │   └── tracer.py               # Execution trace recorder, multi-tier SLOs & operational/budget alerts
 │   ├── orchestration/
-│   │   ├── graph.py               # 5-Agent LangGraph StateGraph builder & execution runner
-│   │   ├── session_store.py       # Thread-safe in-memory session store for multi-turn chat
-│   │   └── state.py               # TypedDict orchestration state schema
-│   ├── rag/
-│   │   ├── ingest.py              # Multi-URL live scraper & markdown semantic chunker
-│   │   └── vector_store.py        # Persistent ChromaDB with hybrid embedding functions
-│   └── tools/
-│       ├── knowledge_tools.py     # RAG retrieval & resilient web search tools
-│       ├── support_tools.py       # Settlement, POS telemetry, and ticket tools
-│       └── escalation_tools.py    # Priority human specialist handoff dispatch tool
+│   │   ├── graph.py                # 5-Agent StateGraph with SqliteSaver, interrupt() & Command(resume=...)
+│   │   ├── persistence.py          # Shared SQLite WAL helpers & persistent HandoffStore
+│   │   ├── session_store.py        # SQLite-backed multi-turn conversational history store
+│   │   └── state.py                # TypedDict orchestration state & RouterPlan risk-tier contract
+│   ├── rag/                        # Live scraper, semantic chunker, and ChromaDB hybrid vector store
+│   └── tools/                      # Knowledge, SQLite-backed support ticket, and escalation tools
 └── tests/
-    ├── conftest.py                # Shared pytest fixtures and test clients
-    ├── unit/                      # Unit test suites (router, rag, tools, guardrails, tracer)
-    └── integration/               # Integration suites (api endpoints, 10 challenge scenarios, chat)
+    ├── conftest.py                 # In-memory DB isolation, rate-limit reset & merchant/operator auth fixtures
+    ├── unit/                       # 8 unit suites (incl. test_auth_and_rate_limit.py)
+    └── integration/                # API contracts, browser cookie auth, HITL pause/resume & 13 scenarios
 ```
