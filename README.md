@@ -5,7 +5,7 @@
 [![LangGraph](https://img.shields.io/badge/LangGraph-StateGraph-orange.svg)](https://langchain-ai.github.io/langgraph/)
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-Vector_Store-green.svg)](https://www.trychroma.com/)
 [![OpenSpec](https://img.shields.io/badge/Spec--Driven-OpenSpec-purple.svg)](https://github.com/openspec)
-[![Tests Passing](https://img.shields.io/badge/Tests-100%2F100%20PASS-brightgreen.svg)](tests/)
+[![Tests Passing](https://img.shields.io/badge/Tests-117%2F117%20PASS-brightgreen.svg)](tests/)
 [![Challenge Benchmark](https://img.shields.io/badge/Challenge%20Scenarios-10%2F10%20(100%25)-success.svg)](scripts/evaluate.py)
 
 Production-grade **Spec-Driven Multi-Agent Support System** engineered for the **Getnet AI Hardcore Engineer Challenge**. Built with **Python 3.12**, **FastAPI**, **LangGraph**, **ChromaDB**, **LangSmith**, and **OpenSpec**.
@@ -181,27 +181,50 @@ uv pip install --python .venv/Scripts/python.exe -r requirements.txt
 
 ---
 
-## 6. API Endpoints & Contract
+## 6. API Endpoints, Security (JWT/RBAC) & Contract
 
-Once running on `http://localhost:8000`, the application exposes:
+Once running on `http://localhost:8000`, the application exposes role-protected endpoints (Bearer JWT `HS256` with `merchant`, `operator`, and `admin` roles, multi-tenant `user_id` isolation, sliding-window rate limiting, and daily token budget caps):
 
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `POST` | `/chat` (aliases: `/`, `/api/v1/message`) | Main multi-agent endpoint accepting `{"message": "...", "user_id": "..."}` |
-| `POST` | `/chat/stream` | Server-Sent Events (SSE) streaming node lifecycle events and token chunks |
-| `GET` | `/dashboard` (also `/`) | Interactive Visual Explainer & Live Observability Dashboard |
-| `GET` | `/health` | Liveness and readiness probe reporting vector store chunks count |
-| `GET` | `/metrics` | Operational metrics (average/p95 latency, agent/tool counters, guardrail blocks) |
-| `GET` | `/alerts` | Real-time production alerts (`HIGH_LATENCY_ALERT`, `SECURITY_GUARDRAIL_ALERT`, `HUMAN_HANDOFF_ALERT`) |
-| `GET` | `/traces/{trace_id}` | Detailed execution trace and span inspector |
-| `GET` | `/docs` | Interactive Swagger / OpenAPI documentation |
+| Method | Endpoint | Access / Role | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/auth/token` | Public (dev) / `X-Bootstrap-Key` (elevated/prod) | Issue a scoped Bearer JWT (`merchant`, `operator`, `admin`) |
+| `POST` | `/chat` (aliases: `/`, `/api/v1/message`) | Authenticated (`merchant` own `user_id` / `operator`) | Main multi-agent endpoint accepting `{"message": "...", "user_id": "..."}` (`max_length` bounded) |
+| `POST` | `/chat/stream` | Authenticated (`merchant` own `user_id` / `operator`) | SSE streaming node lifecycle, token chunks, and `interrupt` HITL events |
+| `GET` / `DELETE` | `/chat/history/{user_id}` | Authenticated (`merchant` own `user_id` / `operator`) | Retrieve or clear SQLite-persisted conversational history |
+| `GET` | `/handoffs` | `operator` / `admin` | List pending (`pending_human_review`) and resolved HITL checkpoints |
+| `POST` | `/handoffs/{thread_id}/resume` | `operator` / `admin` | Resume a paused LangGraph `interrupt()` checkpoint via `Command(resume=...)` |
+| `GET` | `/dashboard` (also `/`) | `operator` / `admin` | Interactive Visual Explainer, Live Observability & HITL Review Queue UI |
+| `GET` | `/health` | Public | Liveness and readiness probe reporting vector store chunks count |
+| `GET` | `/metrics` | `operator` / `admin` | Operational metrics (average/p95 latency, agent/tool counters, guardrail blocks) |
+| `GET` | `/alerts` | `operator` / `admin` | Production alerts (`HIGH_LATENCY_ALERT`, `SECURITY_GUARDRAIL_ALERT`, `HUMAN_HANDOFF_ALERT`, `RATE_LIMIT_ALERT`, `TOKEN_BUDGET_ALERT`) |
+| `GET` | `/traces` / `/traces/{trace_id}` | `operator` / `admin` | Sanitized execution traces and span inspector |
+| `POST` | `/evals/run` | `operator` / `admin` | Trigger Ragas quantitative evaluation benchmark and return scorecard |
+| `GET` | `/docs` | Public | Interactive Swagger / OpenAPI documentation |
 
-### Sample `cURL` Request
+### Sample Authenticated `cURL` Flow
 
 ```bash
+# 1. Mint a merchant Bearer JWT scoped to cliente1988
+TOKEN=$(curl -s -X POST http://localhost:8000/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "cliente1988", "role": "merchant"}' | python -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# 2. Query the multi-agent API with Bearer auth
 curl -X POST http://localhost:8000/chat \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"message": "What'\''s the difference between the Get Clássica and the Get Smart?", "user_id": "cliente1988"}'
+
+# 3. Resume a paused HITL handoff as an operator (using X-Bootstrap-Key to mint operator token)
+OP_TOKEN=$(curl -s -X POST http://localhost:8000/auth/token \
+  -H "Content-Type: application/json" \
+  -H "X-Bootstrap-Key: $AUTH_BOOTSTRAP_API_KEY" \
+  -d '{"user_id": "operator_1", "role": "operator"}' | python -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+curl -X POST http://localhost:8000/handoffs/<thread_id>/resume \
+  -H "Authorization: Bearer $OP_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"decision": "approved", "operator_note": "Chargeback dispute reviewed; settlement cleared."}'
 ```
 
 ### Sample JSON Response
@@ -231,18 +254,19 @@ curl -X POST http://localhost:8000/chat \
 
 ### Automated Test Pyramid
 
-The test suite covers **100 automated tests** structured across 3 tiers:
+The test suite covers **117 automated tests** structured across 3 tiers:
 
 1. **Unit Tests (`tests/unit/`)**:
+   - `test_auth_and_rate_limit.py`: JWT creation/expiry (`401`), RBAC (`403`), anti-IDOR tenant isolation, message `max_length` (`422`), sliding-window rate limits (`429`), and daily token budget caps.
    - `test_router.py`: Intent classification, multi-intent hybrid routing, query rewriting, and 3-tier business risk classification (`high`, `medium`, `low`).
-   - `test_orchestrator.py`: LangGraph dispatching and risk-gated conditional escalation logic.
+   - `test_orchestrator.py`: LangGraph dispatching, risk-gated conditional escalation, and `interrupt()` / `Command(resume=...)` HITL lifecycle.
    - `test_rag.py`: Markdown parser, semantic chunking, ChromaDB indexing, top-$k$ retrieval accuracy.
-   - `test_tools.py`: All 6 LangChain tools (settlement, POS telemetry, tickets, handoff, RAG, weather, FX).
-   - `test_guardrails.py`: Ingress prompt injection blocking and egress PCI PAN / LGPD CPF masking.
-   - `test_observability.py`: Trace recording, token counting, multi-tier dynamic SLO evaluation, alerting rules.
-   - `test_session_memory.py`: In-memory session store, ring-buffer pruning, contextual dialogue history.
+   - `test_tools.py`: All 6 LangChain tools (settlement, POS telemetry, SQLite-backed tickets, handoff, RAG, weather, FX).
+   - `test_guardrails.py`: Normalized/base64 prompt injection blocking and egress PCI PAN / CVV / CPF / CNPJ / Bearer masking.
+   - `test_observability.py`: Trace recording, log/trace PCI sanitization, Ragas quantitative metrics & thresholds, multi-tier dynamic SLO evaluation, and alerting rules.
+   - `test_session_memory.py`: SQLite-backed session store, ring-buffer pruning, contextual dialogue history.
 2. **API Contract Tests (`tests/integration/test_api_endpoints.py`)**:
-   - Validates HTTP contracts for `/chat`, `/chat/stream`, `/health`, `/metrics`, `/alerts`, `/traces/{id}`, and `/dashboard`.
+   - Validates HTTP contracts for `/auth/token`, `/auth/session`, `/auth/logout`, `/chat`, `/chat/stream`, `/handoffs`, `/handoffs/{thread_id}/resume`, `/health`, `/metrics`, `/alerts`, `/traces/{id}`, `/evals/run`, and `/dashboard`.
 3. **End-to-End Challenge Scenario Tests (`tests/integration/test_challenge_scenarios.py`)**:
    - Directly executes the 10 official challenge scenarios + bonus cases from `data/eval_dataset.json`.
 
@@ -261,33 +285,34 @@ The test suite covers **100 automated tests** structured across 3 tiers:
 | **09** | *"How many installments can I split a sale into with the crediário?"* | Router $\to$ Knowledge $\to$ Personality | `retrieve_getnet_knowledge` | `site.getnet.com.br/duvidas/crediario/` | **PASSED** |
 | **10** | *"Can I sell through WhatsApp using the Payment Link?"* | Router $\to$ Knowledge $\to$ Personality | `retrieve_getnet_knowledge` | `site.getnet.com.br/link-de-pagamento/` | **PASSED** |
 
-### How to Run Tests & Evaluation Benchmark
+### How to Run Tests & Quantitative Ragas Evaluation Benchmark
 
 ```bash
-# Run complete test suite (100 passed)
-.venv/Scripts/pytest.exe -v
+# Run complete unit & integration test suite (117 passed)
+.venv/Scripts/python.exe -m pytest -v
 
-# Run automated evaluation benchmark CLI (computes routing, tool & groundedness accuracy)
-.venv/Scripts/python.exe scripts/evaluate.py
+# Run automated evaluation benchmark CLI with Ragas metrics and CI threshold gate
+.venv/Scripts/python.exe scripts/evaluate.py --enforce-thresholds
 ```
+
+The evaluation runner (`scripts/evaluate.py` and `POST /evals/run`) computes **Ragas** quantitative metrics (`faithfulness`, `answer_relevancy`, `context_precision`, `context_recall`, and `hallucination_rate = 1 - faithfulness`) in live LLM mode when `OPENAI_API_KEY` is configured, or via deterministic groundedness scoring (`offline_deterministic`) in offline CI runs (`.github/workflows/ci.yml`).
 
 ---
 
-## 8. Observability, Alerting & Guardrails
+## 8. Observability, Security, HITL & Guardrail Trade-offs
 
-1. **Structured JSON Logging:**  
-   Implemented with `structlog` (`src/observability/logger.py`), binding `trace_id` and `user_id` into contextvars for request tracing.
-2. **LangSmith Tracing:**  
-   Native integration via `@traceable_step`. Setting `LANGCHAIN_TRACING_V2=true` and configuring `LANGCHAIN_API_KEY` streams all node and tool spans directly to LangSmith projects.
-3. **Multi-Tier Dynamic SLO Alerting:**  
-   Evaluates request latency against route complexity:
-   - *Fast Path* ($\le 7.000$ ms): Local RAG, POS diagnostics, Guardrail blocks.
-   - *Complex Path* ($\le 18.000$ ms): Deep Research, Web Search, Multi-Agent handoffs.
-4. **Production Alerts (`GET /alerts`):**  
-   Emits `HIGH_LATENCY_ALERT`, `SECURITY_GUARDRAIL_ALERT`, and `HUMAN_HANDOFF_ALERT`.
-5. **Security & Privacy Guardrails:**  
-   - Ingress: Blocks prompt injections (`instruction_override`, `system_prompt_extraction`) and financial fraud attempts.
-   - Egress: Redacts 15-16 digit PAN card numbers (`PCI_PAN_MASKED`) and CPFs (`LGPD_CPF_MASKED`).
+1. **Authentication, RBAC & Anti-IDOR (`src/api/auth.py`):**  
+   Signed `HS256` Bearer JWTs enforce `merchant` vs. `operator`/`admin` roles and bind `merchant` tokens strictly to their own `user_id` on `/chat`, `/chat/stream`, and `/chat/history/{user_id}`.
+2. **Anti-Token Maxxing & Rate Limiting (`src/api/rate_limit.py`):**  
+   Sliding-window rate limits (`429 Too Many Requests` + `Retry-After`), `ChatRequest.message` `max_length`, and per-user daily/per-request token caps prevent cost-amplification abuse and emit `RATE_LIMIT_ALERT` / `TOKEN_BUDGET_ALERT`.
+3. **Structured JSON Logging & PCI-DSS Sanitization (`src/guardrails/redaction.py`):**  
+   `structlog` processors and `TraceRecorder` mask 13–19 digit PANs, CVVs, CPFs/CNPJs, and Bearer/API keys before logs, spans, or trace previews are emitted or persisted.
+4. **Real Human-in-the-Loop (`interrupt()` + SQLite Checkpointer):**  
+   High/medium-risk escalations and explicit human requests suspend execution inside `escalation_agent` via LangGraph `interrupt()` backed by `SqliteSaver` (`MemorySaver` in `:memory:` mode), resuming cleanly via `Command(resume=...)` at `POST /handoffs/{thread_id}/resume` or the `/dashboard` HITL Review Queue. Low-risk informational queries with low confidence complete without escalation (`escalation-gating-by-risk-tier`).
+5. **Guardrails Normalization & Latency Trade-off (`src/guardrails/validator.py`):**  
+   Ingress validation applies Unicode `NFKC` + homoglyph normalization and decodes candidate base64 payloads before regex inspection, adding sub-millisecond overhead without an external classifier call (a lightweight secondary LLM guardrail can be layered in front if paraphrase-heavy adversarial traffic increases).
+6. **Hardened Container & Persistent SQLite State (`Dockerfile`, `docker-compose.yml`):**  
+   The runtime image runs as non-root `appuser`, excludes test suites, mounts persistent `./data/runtime` and `./logs` volumes, and persists sessions, support tickets, and HITL checkpoints in SQLite.
 
 ---
 

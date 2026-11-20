@@ -93,6 +93,9 @@ class OrchestrationState(TypedDict, total=False):
     sources: list[str]
     confidence_score: float
     handoff_required: bool
+    handoff_status: str
+    thread_id: str
+    human_decision: dict[str, Any] | None
     escalation_details: dict[str, Any] | None
     final_response: str
     chat_history: list[dict[str, str]]

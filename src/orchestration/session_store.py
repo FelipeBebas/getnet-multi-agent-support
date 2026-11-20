@@ -1,13 +1,16 @@
-"""Thread-safe In-Memory Session Store for multi-turn conversational agent orchestration."""
+"""SQLite-backed Thread-safe Session Store for multi-turn conversational agent orchestration."""
 
 from __future__ import annotations
 
+import sqlite3
 import threading
-from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any, Literal
+from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
+
+from src.orchestration.persistence import open_sqlite_connection, resolve_sqlite_target
 
 
 class SessionMessage(BaseModel):
@@ -21,17 +24,55 @@ class SessionMessage(BaseModel):
 
 
 class SessionStore:
-    """In-memory multi-turn conversational history store keyed by user_id."""
+    """Persistent SQLite-backed multi-turn conversational history store keyed by user_id."""
 
-    def __init__(self, max_history_turns: int = 10) -> None:
+    def __init__(
+        self,
+        max_history_turns: int = 10,
+        db_path: str | Path | None = None,
+    ) -> None:
         self.max_history_turns = max_history_turns
-        self._store: dict[str, list[dict[str, str]]] = defaultdict(list)
+        self._explicit_db_path = db_path
         self._lock = threading.Lock()
+        self._conn: sqlite3.Connection | None = None
+        self._active_target: str | None = None
+
+    def _get_conn(self) -> sqlite3.Connection:
+        target = resolve_sqlite_target(self._explicit_db_path)
+        if self._conn is None or self._active_target != target:
+            if self._conn is not None:
+                self._conn.close()
+            self._conn = open_sqlite_connection(target)
+            self._active_target = target
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS session_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    timestamp TEXT NOT NULL
+                )
+                """
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_session_user_id ON session_messages(user_id, id)"
+            )
+            self._conn.commit()
+        return self._conn
 
     def get_history(self, user_id: str) -> list[dict[str, str]]:
         """Return chronological message history list for a user."""
         with self._lock:
-            return list(self._store.get(user_id, []))
+            conn = self._get_conn()
+            rows = conn.execute(
+                "SELECT role, content, timestamp FROM session_messages WHERE user_id = ? ORDER BY id ASC",
+                (user_id,),
+            ).fetchall()
+            return [
+                {"role": r["role"], "content": r["content"], "timestamp": r["timestamp"]}
+                for r in rows
+            ]
 
     def add_message(
         self,
@@ -40,19 +81,28 @@ class SessionStore:
         content: str,
     ) -> None:
         """Append a message turn to the user's session history with ring-buffer pruning."""
+        ts = datetime.now(timezone.utc).isoformat()
+        max_messages = self.max_history_turns * 2
         with self._lock:
-            history = self._store[user_id]
-            history.append(
-                {
-                    "role": role,
-                    "content": content,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }
+            conn = self._get_conn()
+            conn.execute(
+                "INSERT INTO session_messages (user_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+                (user_id, role, content, ts),
             )
-            # Retain up to 2 * max_history_turns (user + assistant pairs)
-            max_messages = self.max_history_turns * 2
-            if len(history) > max_messages:
-                self._store[user_id] = history[-max_messages:]
+            conn.execute(
+                """
+                DELETE FROM session_messages
+                WHERE user_id = ?
+                  AND id NOT IN (
+                    SELECT id FROM session_messages
+                    WHERE user_id = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                  )
+                """,
+                (user_id, user_id, max_messages),
+            )
+            conn.commit()
 
     def format_history_for_prompt(
         self,
@@ -64,7 +114,6 @@ class SessionStore:
         if not history:
             return ""
 
-        # Take last 2 * max_turns messages
         recent = history[-(max_turns * 2):]
         lines: list[str] = []
         for msg in recent:
@@ -78,10 +127,12 @@ class SessionStore:
     def clear(self, user_id: str | None = None) -> None:
         """Clear session history for a specific user or wipe all sessions."""
         with self._lock:
+            conn = self._get_conn()
             if user_id:
-                self._store.pop(user_id, None)
+                conn.execute("DELETE FROM session_messages WHERE user_id = ?", (user_id,))
             else:
-                self._store.clear()
+                conn.execute("DELETE FROM session_messages")
+            conn.commit()
 
 
 session_store = SessionStore()

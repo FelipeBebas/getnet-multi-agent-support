@@ -300,3 +300,72 @@ def test_evaluate_dataset_local_execution_and_token_metrics() -> None:
     assert "average_latency_ms" in report
     assert "total_tokens_consumed" in report
     assert len(report["scenarios"]) == 2
+
+
+def test_trace_and_log_pci_dss_sanitization(tmp_path: Path, capsys) -> None:
+    """Verify PANs, CPFs, and Bearer tokens are masked in persisted traces, spans, and structured logs."""
+    log_file = tmp_path / "sanitized_traces.jsonl"
+    recorder = TraceRecorder(trace_log_path=log_file)
+    log = get_logger("test_pci_logger")
+
+    raw_msg = "Card 5412 7512 3412 8821 CPF 123.456.789-01 Bearer abcdef1234567890"
+    trace = recorder.create_trace(user_id="cliente1988", message=raw_msg, trace_id="trc-pci-01")
+    with recorder.record_span(
+        trace.trace_id,
+        name="support_tool",
+        agent="customer_support_agent",
+        span_type="tool",
+        inputs={"raw": raw_msg},
+    ) as span_handle:
+        span_handle.set_output(note="CPF 123.456.789-01")
+
+    finalized = recorder.finalize_trace(
+        trace.trace_id,
+        final_response="Processed for 5412 7512 3412 8821",
+    )
+    log.info("pci_check", payload=raw_msg)
+    captured = capsys.readouterr().out
+
+    assert "5412 7512 3412 8821" not in finalized.message
+    assert "5412 **** **** 8821" in finalized.message
+    assert "123.456.789-01" not in finalized.spans[0].outputs["note"]
+    assert "abcdef1234567890" not in finalized.spans[0].inputs["raw"]
+    assert "5412 7512 3412 8821" not in finalized.final_response
+    assert "5412 7512 3412 8821" not in captured
+    assert "abcdef1234567890" not in captured
+    assert "5412 7512 3412 8821" not in log_file.read_text(encoding="utf-8")
+
+
+def test_ragas_offline_metrics_and_threshold_gate() -> None:
+    """Verify Ragas quantitative metrics, bounds, hallucination invariant, and CI threshold checks."""
+    from scripts.evaluate import check_quality_thresholds, evaluate_dataset
+
+    report = evaluate_dataset(sync_langsmith=False, max_scenarios=3)
+    assert report["evaluation_mode"] == "offline_deterministic"
+    ragas = report["ragas_metrics"]
+    for key in (
+        "faithfulness",
+        "answer_relevancy",
+        "context_precision",
+        "context_recall",
+        "hallucination_rate",
+    ):
+        assert key in ragas
+        assert 0.0 <= ragas[key] <= 1.0
+
+    assert ragas["hallucination_rate"] == round(1.0 - ragas["faithfulness"], 4)
+    for row in report["scenarios"]:
+        assert "ragas" in row
+        assert row["ragas"]["hallucination_rate"] == round(
+            1.0 - row["ragas"]["faithfulness"], 4
+        )
+
+    passed, failures = check_quality_thresholds(report)
+    assert passed is True
+    assert failures == []
+
+    failed, reasons = check_quality_thresholds(
+        report, min_faithfulness=0.9999, max_hallucination_rate=0.0001
+    )
+    assert failed is False
+    assert len(reasons) >= 1

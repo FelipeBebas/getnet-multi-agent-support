@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.config.settings import settings
+from tests.conftest import make_auth_headers
 
 
 def _load_eval_scenarios() -> list[dict[str, Any]]:
@@ -27,12 +28,14 @@ def test_end_to_end_challenge_scenario(
     scenario: dict[str, Any],
 ) -> None:
     """Execute each scenario through POST /chat and verify routing, tool calls, and answer groundedness."""
+    headers = make_auth_headers(scenario["user_id"], role="merchant")
     resp = api_client.post(
         "/chat",
         json={
             "message": scenario["message"],
             "user_id": scenario["user_id"],
         },
+        headers=headers,
     )
     assert resp.status_code == 200
     body = resp.json()

@@ -16,6 +16,7 @@ from typing import Any, Callable, Iterator, Literal, TypeVar
 from pydantic import BaseModel, Field
 
 from src.config.settings import settings
+from src.guardrails.redaction import sanitize_sensitive_data
 from src.observability.logger import bind_trace_context, clear_trace_context, get_logger
 
 try:
@@ -78,6 +79,8 @@ class AlertEvent(BaseModel):
         "HIGH_LATENCY_ALERT",
         "SECURITY_GUARDRAIL_ALERT",
         "HUMAN_HANDOFF_ALERT",
+        "TOKEN_BUDGET_ALERT",
+        "RATE_LIMIT_ALERT",
     ]
     severity: Literal["info", "warning", "critical"]
     message: str
@@ -122,12 +125,12 @@ class SpanHandle:
         self.span = span
 
     def set_output(self, **kwargs: Any) -> None:
-        """Record key-value outputs on the active span."""
-        self.span.outputs.update(kwargs)
+        """Record sanitized key-value outputs on the active span."""
+        self.span.outputs.update(sanitize_sensitive_data(kwargs))
 
     def set_metadata(self, **kwargs: Any) -> None:
-        """Record key-value metadata on the active span."""
-        self.span.metadata.update(kwargs)
+        """Record sanitized key-value metadata on the active span."""
+        self.span.metadata.update(sanitize_sensitive_data(kwargs))
 
     def set_tokens(
         self,
@@ -216,19 +219,20 @@ class TraceRecorder:
         message: str,
         trace_id: str | None = None,
     ) -> ExecutionTrace:
-        """Initialize and register a new ExecutionTrace."""
+        """Initialize and register a new ExecutionTrace with sanitized message preview."""
         resolved_id = trace_id or f"trc-{uuid.uuid4().hex[:12]}"
+        safe_message = sanitize_sensitive_data(message)
         trace = ExecutionTrace(
             trace_id=resolved_id,
             user_id=user_id,
-            message=message,
+            message=safe_message,
         )
         self._active_traces[resolved_id] = (trace, time.perf_counter())
         bind_trace_context(trace_id=resolved_id, user_id=user_id)
         logger.info(
             "trace_started",
             agent="orchestrator",
-            message_preview=message[:120],
+            message_preview=safe_message[:120],
         )
         return trace
 
@@ -247,8 +251,8 @@ class TraceRecorder:
             name=name,
             agent=agent,
             span_type=span_type,
-            inputs=inputs or {},
-            metadata=metadata or {},
+            inputs=sanitize_sensitive_data(inputs or {}),
+            metadata=sanitize_sensitive_data(metadata or {}),
         )
         handle = SpanHandle(span)
         start = time.perf_counter()
@@ -333,7 +337,7 @@ class TraceRecorder:
         trace.confidence_score = round(float(confidence_score), 3)
         trace.guardrail_triggered = bool(guardrail_triggered)
         trace.handoff_required = bool(handoff_required)
-        trace.final_response = final_response
+        trace.final_response = sanitize_sensitive_data(final_response)
 
         if status is not None:
             trace.status = status
@@ -449,6 +453,24 @@ class TraceRecorder:
             )
             triggered.append(alert)
 
+        # 4. Single-request token budget cap exceeded
+        if trace.total_tokens > settings.max_tokens_per_request:
+            alert = AlertEvent(
+                trace_id=trace.trace_id,
+                user_id=trace.user_id,
+                alert_type="TOKEN_BUDGET_ALERT",
+                severity="warning",
+                message=(
+                    f"Request consumed {trace.total_tokens} tokens, exceeding "
+                    f"per-request budget cap ({settings.max_tokens_per_request})."
+                ),
+                details={
+                    "total_tokens": trace.total_tokens,
+                    "max_tokens_per_request": settings.max_tokens_per_request,
+                },
+            )
+            triggered.append(alert)
+
         for alert in triggered:
             self._alerts.append(alert)
             logger.warning(
@@ -461,6 +483,36 @@ class TraceRecorder:
             )
 
         return triggered
+
+    def record_operational_alert(
+        self,
+        *,
+        user_id: str,
+        alert_type: Literal["RATE_LIMIT_ALERT", "TOKEN_BUDGET_ALERT", "SECURITY_GUARDRAIL_ALERT"],
+        message: str,
+        severity: Literal["info", "warning", "critical"] = "warning",
+        details: dict[str, Any] | None = None,
+        trace_id: str = "trc-gateway",
+    ) -> AlertEvent:
+        """Record an API-gateway operational/security alert outside an orchestration trace."""
+        alert = AlertEvent(
+            trace_id=trace_id,
+            user_id=user_id,
+            alert_type=alert_type,
+            severity=severity,
+            message=sanitize_sensitive_data(message),
+            details=sanitize_sensitive_data(details or {}),
+        )
+        self._alerts.append(alert)
+        logger.warning(
+            "production_alert_triggered",
+            agent="api_gateway",
+            alert_id=alert.alert_id,
+            alert_type=alert.alert_type,
+            severity=alert.severity,
+            alert_message=alert.message,
+        )
+        return alert
 
     def _persist_trace_jsonl(self, trace: ExecutionTrace) -> None:
         """Append serialized trace JSON line to local log file."""

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 import re
+import unicodedata
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from src.config.settings import settings
+from src.guardrails.redaction import redact_text_with_tags, sanitize_sensitive_data
 from src.observability.logger import get_logger
 from src.observability.tracer import traceable_step
 
@@ -72,13 +75,48 @@ _UNSAFE_CONTENT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ),
 ]
 
-# Matches 15 or 16 contiguous digits (or separated by single spaces/dashes) representing an unmasked PAN
-_RAW_PAN_REGEX = re.compile(
-    r"(?<![\d\*])(?:\d{4}[\s\-]?){3}\d{3,4}(?![\d\*])"
+_ZERO_WIDTH_RE = re.compile(r"[\u200b-\u200f\u202a-\u202e\ufeff\u00ad]")
+_BASE64_TOKEN_RE = re.compile(r"\b([A-Za-z0-9+/]{16,}={0,2})\b")
+_HOMOGLYPH_MAP = str.maketrans(
+    {
+        "а": "a",
+        "е": "e",
+        "о": "o",
+        "р": "p",
+        "с": "c",
+        "х": "x",
+        "і": "i",
+        "А": "A",
+        "Е": "E",
+        "О": "O",
+        "Р": "P",
+        "С": "C",
+        "Х": "X",
+        "І": "I",
+    }
 )
 
-# Matches unmasked CPF (000.000.000-00)
-_RAW_CPF_REGEX = re.compile(r"\b(\d{3})\.(\d{3})\.(\d{3})-(\d{2})\b")
+
+def _extract_inspection_candidates(text: str) -> list[str]:
+    """Return raw, Unicode-normalized, and decoded base64 strings for injection inspection."""
+    normalized = unicodedata.normalize("NFKC", text)
+    normalized = _ZERO_WIDTH_RE.sub("", normalized).translate(_HOMOGLYPH_MAP)
+    candidates = [text]
+    if normalized != text:
+        candidates.append(normalized)
+
+    for match in _BASE64_TOKEN_RE.findall(normalized):
+        padded = match + ("=" * ((4 - len(match) % 4) % 4))
+        try:
+            decoded_bytes = base64.b64decode(padded, validate=True)
+            decoded = decoded_bytes.decode("utf-8", errors="strict").strip()
+            if decoded and any(ch.isalpha() for ch in decoded):
+                dec_norm = _ZERO_WIDTH_RE.sub("", unicodedata.normalize("NFKC", decoded)).translate(_HOMOGLYPH_MAP)
+                candidates.append(dec_norm)
+        except Exception:
+            continue
+
+    return candidates
 
 
 class InputGuardrailResult(BaseModel):
@@ -119,75 +157,61 @@ def validate_input_message(message: str) -> InputGuardrailResult:
     if not settings.enable_input_guardrails:
         return InputGuardrailResult()
 
-    for rule_name, pattern in _PROMPT_INJECTION_PATTERNS:
-        if pattern.search(cleaned):
-            logger.warning(
-                "input_guardrail_blocked_prompt_injection",
-                matched_rule=rule_name,
-                message_preview=cleaned[:120],
-            )
-            return InputGuardrailResult(
-                allowed=False,
-                guardrail_triggered=True,
-                violation_category="prompt_injection",
-                matched_rule=rule_name,
-                reason=f"Blocked prompt injection or system override attempt ({rule_name}).",
-                safe_refusal_message=(
-                    "I cannot fulfill requests that attempt to override system security instructions "
-                    "or access unauthorized internal records. I am Getnet's virtual assistant and can "
-                    "help you with Getnet products (POS terminals, Pix, Crediário, Antecipação, Payment Link) "
-                    "or your merchant account support."
-                ),
-            )
+    candidates = _extract_inspection_candidates(cleaned)
+    safe_preview = sanitize_sensitive_data(cleaned[:120])
 
-    for rule_name, pattern in _UNSAFE_CONTENT_PATTERNS:
-        if pattern.search(cleaned):
-            logger.warning(
-                "input_guardrail_blocked_unsafe_content",
-                matched_rule=rule_name,
-                message_preview=cleaned[:120],
-            )
-            return InputGuardrailResult(
-                allowed=False,
-                guardrail_triggered=True,
-                violation_category="unsafe_or_toxic",
-                matched_rule=rule_name,
-                reason=f"Blocked unsafe or fraudulent activity request ({rule_name}).",
-                safe_refusal_message=(
-                    "I cannot assist with requests involving unauthorized card manipulation or financial "
-                    "compliance circumvention. If you need help with legitimate security, anti-fraud "
-                    "protection, or disputed transactions on your Getnet account, please let me know."
-                ),
-            )
+    for candidate in candidates:
+        for rule_name, pattern in _PROMPT_INJECTION_PATTERNS:
+            if pattern.search(candidate):
+                logger.warning(
+                    "input_guardrail_blocked_prompt_injection",
+                    matched_rule=rule_name,
+                    message_preview=safe_preview,
+                )
+                return InputGuardrailResult(
+                    allowed=False,
+                    guardrail_triggered=True,
+                    violation_category="prompt_injection",
+                    matched_rule=rule_name,
+                    reason=f"Blocked prompt injection or system override attempt ({rule_name}).",
+                    safe_refusal_message=(
+                        "I cannot fulfill requests that attempt to override system security instructions "
+                        "or access unauthorized internal records. I am Getnet's virtual assistant and can "
+                        "help you with Getnet products (POS terminals, Pix, Crediário, Antecipação, Payment Link) "
+                        "or your merchant account support."
+                    ),
+                )
+
+        for rule_name, pattern in _UNSAFE_CONTENT_PATTERNS:
+            if pattern.search(candidate):
+                logger.warning(
+                    "input_guardrail_blocked_unsafe_content",
+                    matched_rule=rule_name,
+                    message_preview=safe_preview,
+                )
+                return InputGuardrailResult(
+                    allowed=False,
+                    guardrail_triggered=True,
+                    violation_category="unsafe_or_toxic",
+                    matched_rule=rule_name,
+                    reason=f"Blocked unsafe or fraudulent activity request ({rule_name}).",
+                    safe_refusal_message=(
+                        "I cannot assist with requests involving unauthorized card manipulation or financial "
+                        "compliance circumvention. If you need help with legitimate security, anti-fraud "
+                        "protection, or disputed transactions on your Getnet account, please let me know."
+                    ),
+                )
 
     return InputGuardrailResult()
 
 
-def _mask_pan_match(match: re.Match[str]) -> str:
-    raw = match.group(0)
-    digits = re.sub(r"\D", "", raw)
-    if len(digits) < 13 or len(digits) > 19:
-        return raw
-    return f"{digits[:4]} **** **** {digits[-4:]}"
-
-
 @traceable_step(name="sanitize_output_guardrail", run_type="chain")
 def sanitize_output_message(response_text: str) -> OutputGuardrailResult:
-    """Redact unmasked 15-16 digit card numbers (PAN) and sensitive CPFs from outgoing responses."""
+    """Redact unmasked PANs, CVVs, CPFs/CNPJs, and secrets from outgoing responses."""
     if not response_text or not settings.enable_output_guardrails:
         return OutputGuardrailResult(sanitized_text=response_text or "")
 
-    redactions: list[str] = []
-    sanitized = response_text
-
-    if _RAW_PAN_REGEX.search(sanitized):
-        sanitized = _RAW_PAN_REGEX.sub(_mask_pan_match, sanitized)
-        redactions.append("PCI_PAN_MASKED")
-
-    if _RAW_CPF_REGEX.search(sanitized):
-        sanitized = _RAW_CPF_REGEX.sub(r"***.***.***-\4", sanitized)
-        redactions.append("LGPD_CPF_MASKED")
-
+    sanitized, redactions = redact_text_with_tags(response_text)
     modified = len(redactions) > 0
     if modified:
         logger.info("output_guardrail_redacted_pii", redactions=redactions)

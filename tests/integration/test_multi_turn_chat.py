@@ -4,16 +4,20 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from tests.conftest import make_auth_headers
+
 
 def test_multi_turn_currency_followup_chain(api_client: TestClient) -> None:
     """Verify that an elliptical follow-up like 'what about yen?' succeeds without 500 errors."""
     user_id = "test_fx_multi_turn_user"
-    api_client.delete(f"/chat/history/{user_id}")
+    headers = make_auth_headers(user_id, role="merchant")
+    api_client.delete(f"/chat/history/{user_id}", headers=headers)
 
     # Turn 1: Euro exchange rate
     turn1_resp = api_client.post(
         "/chat",
         json={"message": "What's the euro exchange rate today?", "user_id": user_id},
+        headers=headers,
     )
     assert turn1_resp.status_code == 200
     t1_data = turn1_resp.json()
@@ -26,6 +30,7 @@ def test_multi_turn_currency_followup_chain(api_client: TestClient) -> None:
     turn2_resp = api_client.post(
         "/chat",
         json={"message": "what about yen?", "user_id": user_id},
+        headers=headers,
     )
     assert turn2_resp.status_code == 200
     t2_data = turn2_resp.json()
@@ -39,7 +44,8 @@ def test_multi_turn_currency_followup_chain(api_client: TestClient) -> None:
 def test_multi_turn_pos_pricing_followup_chain(api_client: TestClient) -> None:
     """Verify conversational context resolution for POS product follow-ups ('quanto custa ela?')."""
     user_id = "test_pos_multi_turn_user"
-    api_client.delete(f"/chat/history/{user_id}")
+    headers = make_auth_headers(user_id, role="merchant")
+    api_client.delete(f"/chat/history/{user_id}", headers=headers)
 
     # Turn 1: Product comparison
     turn1_resp = api_client.post(
@@ -48,6 +54,7 @@ def test_multi_turn_pos_pricing_followup_chain(api_client: TestClient) -> None:
             "message": "What's the difference between the Get Clássica and the Get Smart?",
             "user_id": user_id,
         },
+        headers=headers,
     )
     assert turn1_resp.status_code == 200
     t1_data = turn1_resp.json()
@@ -57,6 +64,7 @@ def test_multi_turn_pos_pricing_followup_chain(api_client: TestClient) -> None:
     turn2_resp = api_client.post(
         "/chat",
         json={"message": "quanto custa ela?", "user_id": user_id},
+        headers=headers,
     )
     assert turn2_resp.status_code == 200
     t2_data = turn2_resp.json()
@@ -68,12 +76,14 @@ def test_multi_turn_pos_pricing_followup_chain(api_client: TestClient) -> None:
 def test_multi_turn_rates_followup_chain(api_client: TestClient) -> None:
     """Verify follow-up inquiries on acquiring rates ('e no débito?')."""
     user_id = "test_rates_multi_turn_user"
-    api_client.delete(f"/chat/history/{user_id}")
+    headers = make_auth_headers(user_id, role="merchant")
+    api_client.delete(f"/chat/history/{user_id}", headers=headers)
 
     # Turn 1: Pix rates
     turn1_resp = api_client.post(
         "/chat",
         json={"message": "Qual a taxa do Pix na maquininha Getnet?", "user_id": user_id},
+        headers=headers,
     )
     assert turn1_resp.status_code == 200
     t1_data = turn1_resp.json()
@@ -83,6 +93,7 @@ def test_multi_turn_rates_followup_chain(api_client: TestClient) -> None:
     turn2_resp = api_client.post(
         "/chat",
         json={"message": "e no débito?", "user_id": user_id},
+        headers=headers,
     )
     assert turn2_resp.status_code == 200
     t2_data = turn2_resp.json()
@@ -94,22 +105,26 @@ def test_multi_turn_session_isolation_and_delete(api_client: TestClient) -> None
     """Verify session isolation between distinct users and deletion endpoint."""
     user_a = "user_isolation_alpha"
     user_b = "user_isolation_beta"
+    headers_a = make_auth_headers(user_a, role="merchant")
+    headers_b = make_auth_headers(user_b, role="merchant")
 
-    api_client.delete(f"/chat/history/{user_a}")
-    api_client.delete(f"/chat/history/{user_b}")
+    api_client.delete(f"/chat/history/{user_a}", headers=headers_a)
+    api_client.delete(f"/chat/history/{user_b}", headers=headers_b)
 
     api_client.post(
         "/chat",
         json={"message": "What is the euro rate?", "user_id": user_a},
+        headers=headers_a,
     )
     api_client.post(
         "/chat",
         json={"message": "Qual a taxa do Pix?", "user_id": user_b},
+        headers=headers_b,
     )
 
     # Check histories independently
-    hist_a = api_client.get(f"/chat/history/{user_a}").json()
-    hist_b = api_client.get(f"/chat/history/{user_b}").json()
+    hist_a = api_client.get(f"/chat/history/{user_a}", headers=headers_a).json()
+    hist_b = api_client.get(f"/chat/history/{user_b}", headers=headers_b).json()
 
     assert hist_a["turns_count"] == 2
     assert "euro" in hist_a["messages"][0]["content"].lower()
@@ -117,8 +132,8 @@ def test_multi_turn_session_isolation_and_delete(api_client: TestClient) -> None
     assert "pix" in hist_b["messages"][0]["content"].lower()
 
     # Clear user A
-    del_res = api_client.delete(f"/chat/history/{user_a}")
+    del_res = api_client.delete(f"/chat/history/{user_a}", headers=headers_a)
     assert del_res.status_code == 200
 
-    assert api_client.get(f"/chat/history/{user_a}").json()["turns_count"] == 0
-    assert api_client.get(f"/chat/history/{user_b}").json()["turns_count"] == 2
+    assert api_client.get(f"/chat/history/{user_a}", headers=headers_a).json()["turns_count"] == 0
+    assert api_client.get(f"/chat/history/{user_b}", headers=headers_b).json()["turns_count"] == 2

@@ -22,8 +22,12 @@ build/
 .env.*.local
 !.env.example
 
-# Local vector store & runtime telemetry logs
+# Local vector store, SQLite runtime DBs & telemetry logs
 data/chroma_db/
+data/runtime/
+*.db
+*.db-wal
+*.db-shm
 logs/
 *.log
 

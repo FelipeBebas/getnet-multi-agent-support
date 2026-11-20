@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+from src.config.settings import settings
 
 
 class ChatRequest(BaseModel):
@@ -19,6 +21,7 @@ class ChatRequest(BaseModel):
     user_id: str = Field(
         ...,
         min_length=1,
+        max_length=128,
         description="Unique merchant/user identifier.",
         examples=["cliente1988"],
     )
@@ -30,6 +33,16 @@ class ChatRequest(BaseModel):
         if not cleaned:
             raise ValueError("Field cannot be empty or whitespace only.")
         return cleaned
+
+    @field_validator("message")
+    @classmethod
+    def _enforce_message_max_length(cls, value: str) -> str:
+        max_len = int(settings.max_message_length)
+        if len(value) > max_len:
+            raise ValueError(
+                f"Message exceeds maximum allowed length of {max_len} characters."
+            )
+        return value
 
 
 class ChatResponse(BaseModel):
@@ -60,6 +73,18 @@ class ChatResponse(BaseModel):
     handoff_required: bool = Field(
         default=False,
         description="True when the request was escalated to a human specialist queue.",
+    )
+    handoff_status: Literal["none", "pending_human_review", "resolved"] = Field(
+        default="none",
+        description="Current HITL lifecycle state for this conversation turn.",
+    )
+    thread_id: str | None = Field(
+        default=None,
+        description="LangGraph checkpoint thread_id used to pause and resume HITL handoffs.",
+    )
+    human_decision: dict[str, Any] | None = Field(
+        default=None,
+        description="Operator decision payload injected upon HITL resumption.",
     )
     trace_id: str = Field(description="Unique execution trace identifier for observability.")
     latency_ms: float = Field(default=0.0, description="Total execution latency in milliseconds.")
@@ -114,3 +139,45 @@ class HealthResponse(BaseModel):
     llm_mode: str
     langsmith_enabled: bool
     model: str = "gpt-4o-mini"
+
+
+class HandoffResumeRequest(BaseModel):
+    """Operator payload for resuming a paused LangGraph HITL checkpoint."""
+
+    decision: Literal["approved", "rejected", "resolved_with_note"] = Field(
+        default="approved",
+        description="Specialist review outcome.",
+    )
+    operator_note: str = Field(
+        ...,
+        min_length=1,
+        max_length=2000,
+        description="Human specialist guidance or resolution note returned to the merchant.",
+    )
+
+    @field_validator("operator_note")
+    @classmethod
+    def _reject_blank_note(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("operator_note cannot be empty or whitespace only.")
+        return cleaned
+
+
+class HandoffSummary(BaseModel):
+    """Persisted HITL handoff checkpoint summary."""
+
+    thread_id: str
+    trace_id: str
+    user_id: str
+    protocol_id: str
+    ticket_id: str
+    risk_tier: str
+    reason: str
+    message_preview: str
+    status: Literal["pending_human_review", "resolved"]
+    decision: str | None = None
+    operator_id: str | None = None
+    operator_note: str | None = None
+    created_at: str
+    updated_at: str

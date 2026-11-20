@@ -68,8 +68,11 @@ def test_session_store_clear() -> None:
 
 
 def test_chat_history_endpoints() -> None:
+    from tests.conftest import make_auth_headers
+
     client = TestClient(app)
     user_id = "test_endpoint_user"
+    headers = make_auth_headers(user_id, role="merchant")
 
     # Seed message
     session_store.clear(user_id)
@@ -77,7 +80,7 @@ def test_chat_history_endpoints() -> None:
     session_store.add_message(user_id, "assistant", "Resposta teste")
 
     # GET /chat/history/{user_id}
-    res = client.get(f"/chat/history/{user_id}")
+    res = client.get(f"/chat/history/{user_id}", headers=headers)
     assert res.status_code == 200
     data = res.json()
     assert data["user_id"] == user_id
@@ -85,14 +88,27 @@ def test_chat_history_endpoints() -> None:
     assert len(data["messages"]) == 2
 
     # DELETE /chat/history/{user_id}
-    del_res = client.delete(f"/chat/history/{user_id}")
+    del_res = client.delete(f"/chat/history/{user_id}", headers=headers)
     assert del_res.status_code == 200
     assert del_res.json()["status"] == "cleared"
 
     # Verify cleared
-    res_after = client.get(f"/chat/history/{user_id}")
+    res_after = client.get(f"/chat/history/{user_id}", headers=headers)
     assert res_after.status_code == 200
     assert res_after.json()["turns_count"] == 0
+
+
+def test_session_store_sqlite_persistence_across_reloads(tmp_path) -> None:
+    db_file = tmp_path / "sessions.db"
+    store_a = SessionStore(max_history_turns=5, db_path=db_file)
+    store_a.add_message("u_persist", "user", "Qual o prazo do Pix?")
+    store_a.add_message("u_persist", "assistant", "Liquidação imediata.")
+
+    store_b = SessionStore(max_history_turns=5, db_path=db_file)
+    history = store_b.get_history("u_persist")
+    assert len(history) == 2
+    assert history[0]["content"] == "Qual o prazo do Pix?"
+    assert history[1]["content"] == "Liquidação imediata."
 
 
 def test_contextual_query_rewriter_fx_followup() -> None:

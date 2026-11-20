@@ -1,0 +1,48 @@
+name: Getnet Multi-Agent CI & Evals Gate
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test-and-eval:
+    runs-on: ubuntu-latest
+    env:
+      LLM_PROVIDER: mock
+      LANGCHAIN_TRACING_V2: "false"
+      RUNTIME_DB_PATH: ":memory:"
+      HITL_CHECKPOINT_DB_PATH: ":memory:"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Seed local ChromaDB knowledge base
+        run: python scripts/ingest_kb.py --skip-live-scrape
+
+      - name: Run full unit and integration test suite
+        run: pytest -q
+
+      - name: Run Ragas quantitative evaluation gate
+        run: python scripts/evaluate.py --enforce-thresholds
+
+      - name: Set up Node.js and validate OpenSpec specs
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Validate OpenSpec changes strictly
+        run: npx --yes @fission-ai/openspec validate --all --strict

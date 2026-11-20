@@ -14,6 +14,12 @@ __pycache__
 htmlcov
 logs/
 data/chroma_db/
+data/runtime/
+tests/
+archive_v1/
+*.mp4
+.env
+.env.example
 AI_Hardcore_Engineer_Multi-Agent.pdf
 .vscode
 .idea

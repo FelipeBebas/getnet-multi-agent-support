@@ -9,8 +9,18 @@ from typing import Any
 import structlog
 
 from src.config.settings import settings
+from src.guardrails.redaction import sanitize_sensitive_data
 
 _LOGGING_CONFIGURED = False
+
+
+def _sanitize_log_event(
+    _logger: Any,
+    _method_name: str,
+    event_dict: dict[str, Any],
+) -> dict[str, Any]:
+    """Mask PANs, CVVs, CPFs/CNPJs, and Bearer secrets in all structured log fields."""
+    return sanitize_sensitive_data(event_dict)
 
 
 def configure_logging(log_level: str | None = None) -> None:
@@ -33,6 +43,7 @@ def configure_logging(log_level: str | None = None) -> None:
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
             structlog.processors.UnicodeDecoder(),
+            _sanitize_log_event,
             structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.make_filtering_bound_logger(numeric_level),

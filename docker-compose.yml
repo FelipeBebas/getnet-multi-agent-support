@@ -15,12 +15,19 @@ services:
       - PORT=8000
       - LLM_PROVIDER=${LLM_PROVIDER:-auto}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - AUTH_JWT_SECRET=${AUTH_JWT_SECRET:-change-me-to-a-32-plus-byte-random-secret-in-prod}
+      - AUTH_ALLOW_DEV_TOKEN_ENDPOINT=${AUTH_ALLOW_DEV_TOKEN_ENDPOINT:-false}
+      - AUTH_BOOTSTRAP_API_KEY=${AUTH_BOOTSTRAP_API_KEY:-}
+      - RUNTIME_DB_PATH=/app/data/runtime/getnet_runtime.db
+      - HITL_CHECKPOINT_DB_PATH=/app/data/runtime/hitl_checkpoints.db
       - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2:-false}
       - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY:-}
       - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT:-getnet-multi-agent-support}
     volumes:
       - ./logs:/app/logs
-      - ./src:/app/src
+      - ./data/runtime:/app/data/runtime
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s

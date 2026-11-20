@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import sqlite3
+from pathlib import Path
 from typing import Any, AsyncGenerator
 
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, interrupt
 
 from src.agents.escalation_agent import run_escalation_agent
 from src.agents.knowledge_agent import run_knowledge_agent
-from src.agents.personality_agent import run_personality_agent, stream_personality_agent
+from src.agents.personality_agent import run_personality_agent
 from src.agents.router_agent import classify_and_route
 from src.agents.support_agent import run_customer_support_agent
 from src.config.settings import settings
@@ -18,6 +23,7 @@ from src.guardrails.validator import (
 )
 from src.observability.logger import get_logger
 from src.observability.tracer import trace_recorder, traceable_step
+from src.orchestration.persistence import handoff_store
 from src.orchestration.session_store import session_store
 from src.orchestration.state import OrchestrationState
 
@@ -242,9 +248,12 @@ def _customer_support_agent_node(state: OrchestrationState) -> OrchestrationStat
 
 def _escalation_agent_node(state: OrchestrationState) -> OrchestrationState:
     trace_id = state["trace_id"]
+    thread_id = str(state.get("thread_id") or f"thr-{trace_id}")
     message = state["message"]
     user_id = state["user_id"]
     current_conf = float(state.get("confidence_score") or 0.48)
+    plan = state.get("router_plan") or {}
+    risk_tier = str(plan.get("risk_tier") or "high")
 
     queue = [a for a in (state.get("agent_queue") or []) if a != "escalation_agent"]
 
@@ -254,45 +263,95 @@ def _escalation_agent_node(state: OrchestrationState) -> OrchestrationState:
         else "Explicit human specialist request or complex policy escalation"
     )
 
-    with trace_recorder.record_span(
-        trace_id=trace_id,
-        name="escalation_agent_execute",
-        agent="escalation_agent",
-        span_type="agent",
-        inputs={"message": message, "user_id": user_id, "reason": reason},
-    ) as span:
-        step_out = run_escalation_agent(
-            message=message,
-            user_id=user_id,
-            reason=reason,
-            confidence_score=min(current_conf, 0.48),
-        )
-        span.set_output(
-            tools_used=step_out.tools_used,
-            handoff_required=True,
-        )
-
-    for tool_name in step_out.tools_used:
+    existing = handoff_store.get(thread_id)
+    if existing is None:
         with trace_recorder.record_span(
             trace_id=trace_id,
-            name=tool_name,
+            name="escalation_agent_execute",
             agent="escalation_agent",
-            span_type="tool",
-            inputs={"user_id": user_id},
-        ) as t_span:
-            t_span.set_output(handoff_required=True)
+            span_type="agent",
+            inputs={"message": message, "user_id": user_id, "reason": reason, "thread_id": thread_id},
+        ) as span:
+            initial_step = run_escalation_agent(
+                message=message,
+                user_id=user_id,
+                reason=reason,
+                confidence_score=min(current_conf, 0.48),
+            )
+            span.set_output(
+                tools_used=initial_step.tools_used,
+                handoff_required=True,
+                handoff_status="pending_human_review",
+            )
+
+        for tool_name in initial_step.tools_used:
+            with trace_recorder.record_span(
+                trace_id=trace_id,
+                name=tool_name,
+                agent="escalation_agent",
+                span_type="tool",
+                inputs={"user_id": user_id, "thread_id": thread_id},
+            ) as t_span:
+                t_span.set_output(handoff_required=True)
+
+        handoff_meta = (initial_step.raw_data or {}).get("handoff") or {}
+        ticket_meta = ((initial_step.raw_data or {}).get("ticket") or {}).get("created_ticket") or {}
+        protocol_id = str(handoff_meta.get("protocol_id") or "ESC-GN-PENDING")
+        ticket_id = str(ticket_meta.get("ticket_id") or "TCK-2026-ESC")
+        handoff_store.upsert_pending(
+            thread_id=thread_id,
+            trace_id=trace_id,
+            user_id=user_id,
+            protocol_id=protocol_id,
+            ticket_id=ticket_id,
+            risk_tier=risk_tier,
+            reason=reason,
+            message_preview=message[:200],
+        )
+    else:
+        protocol_id = str(existing["protocol_id"])
+        ticket_id = str(existing["ticket_id"])
+
+    # Suspend graph execution via native LangGraph interrupt() until an operator resumes via Command(resume=...)
+    decision_raw = interrupt(
+        {
+            "thread_id": thread_id,
+            "user_id": user_id,
+            "protocol_id": protocol_id,
+            "ticket_id": ticket_id,
+            "risk_tier": risk_tier,
+            "reason": reason,
+            "handoff_status": "pending_human_review",
+        }
+    )
+    decision_dict = (
+        dict(decision_raw)
+        if isinstance(decision_raw, dict)
+        else {"decision": "approved", "operator_note": str(decision_raw), "operator_id": "operator"}
+    )
+
+    resolved_step = run_escalation_agent(
+        message=message,
+        user_id=user_id,
+        reason=reason,
+        confidence_score=min(current_conf, 0.48),
+        human_decision=decision_dict,
+        existing_protocol_id=protocol_id,
+        existing_ticket_id=ticket_id,
+    )
 
     routed = list(state.get("routed_agents") or [])
-    routed.append("escalation_agent")
+    if "escalation_agent" not in routed:
+        routed.append("escalation_agent")
 
     outputs = list(state.get("agent_outputs") or [])
-    outputs.append(step_out.model_dump())
+    outputs.append(resolved_step.model_dump())
 
     tools = list(state.get("tools_used") or [])
-    tools.extend(step_out.tools_used)
+    tools.extend(resolved_step.tools_used)
 
     sources = list(state.get("sources") or [])
-    sources.extend(step_out.sources)
+    sources.extend(resolved_step.sources)
 
     return {
         "agent_queue": queue,
@@ -300,9 +359,12 @@ def _escalation_agent_node(state: OrchestrationState) -> OrchestrationState:
         "agent_outputs": outputs,
         "tools_used": list(dict.fromkeys(tools)),
         "sources": list(dict.fromkeys(sources)),
-        "confidence_score": step_out.confidence,
+        "confidence_score": resolved_step.confidence,
         "handoff_required": True,
-        "escalation_details": step_out.raw_data,
+        "handoff_status": "resolved",
+        "thread_id": thread_id,
+        "human_decision": decision_dict,
+        "escalation_details": resolved_step.raw_data,
     }
 
 
@@ -417,8 +479,20 @@ def _dispatch_next_from_queue(state: OrchestrationState) -> str:
     return "personality_agent"
 
 
-def build_orchestration_graph() -> Any:
-    """Construct and compile the 5-agent LangGraph StateGraph workflow."""
+def _build_checkpointer() -> Any:
+    """Create the configured LangGraph checkpointer (SqliteSaver or MemorySaver)."""
+    raw = str(settings.hitl_checkpoint_db_path or ":memory:").strip()
+    if not raw or raw == ":memory:":
+        return MemorySaver()
+    resolved = settings.resolve_path(raw)
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(resolved), check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    return SqliteSaver(conn)
+
+
+def build_orchestration_graph(checkpointer: Any | None = None) -> Any:
+    """Construct and compile the 5-agent LangGraph StateGraph workflow with HITL checkpointing."""
     workflow = StateGraph(OrchestrationState)
 
     workflow.add_node("input_guardrail", _input_guardrail_node)
@@ -455,18 +529,138 @@ def build_orchestration_graph() -> Any:
     workflow.add_edge("personality_agent", "output_guardrail")
     workflow.add_edge("output_guardrail", END)
 
-    return workflow.compile()
+    resolved_cp = checkpointer if checkpointer is not None else _build_checkpointer()
+    return workflow.compile(checkpointer=resolved_cp)
 
 
 _compiled_graph: Any = None
+_compiled_cp_target: str | None = None
 
 
 def get_orchestration_graph() -> Any:
-    """Return cached compiled LangGraph instance."""
-    global _compiled_graph
-    if _compiled_graph is None:
+    """Return cached compiled LangGraph instance, rebuilding if checkpointer path changed."""
+    global _compiled_graph, _compiled_cp_target
+    target = str(settings.hitl_checkpoint_db_path or ":memory:")
+    if _compiled_graph is None or _compiled_cp_target != target:
         _compiled_graph = build_orchestration_graph()
+        _compiled_cp_target = target
     return _compiled_graph
+
+
+def _format_pending_handoff_message(
+    user_id: str,
+    thread_id: str,
+    interrupt_payload: dict[str, Any],
+) -> str:
+    """Format a safe merchant-facing message when execution pauses at interrupt()."""
+    protocol_id = interrupt_payload.get("protocol_id", "ESC-GN-PENDING")
+    ticket_id = interrupt_payload.get("ticket_id", "TCK-2026-ESC")
+    reason = interrupt_payload.get("reason", "Human specialist verification requested.")
+    raw = (
+        f"Hello **{user_id}**, your request has been escalated for human specialist approval "
+        f"(Status: `pending_human_review`, Thread: `{thread_id}`).\n\n"
+        f"- **Escalation Protocol**: `{protocol_id}`\n"
+        f"- **Support Ticket**: `{ticket_id}`\n"
+        f"- **Reason**: {reason}\n\n"
+        "Execution is paused awaiting specialist confirmation. Once reviewed, your response will resume automatically."
+    )
+    return sanitize_output_message(raw).sanitized_text
+
+
+def _build_interrupted_result(
+    *,
+    trace_id: str,
+    thread_id: str,
+    user_id: str,
+    message: str,
+    state_snapshot: dict[str, Any],
+    interrupt_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Finalize trace and build response dict when LangGraph hits interrupt()."""
+    routed = list(state_snapshot.get("routed_agents") or [])
+    if "escalation_agent" not in routed:
+        routed.append("escalation_agent")
+    tools = list(state_snapshot.get("tools_used") or [])
+    for t_name in ("dispatch_human_handoff", "manage_support_ticket"):
+        if t_name not in tools:
+            tools.append(t_name)
+    sources = list(state_snapshot.get("sources") or [])
+    for src_name in (
+        "Getnet Omnichannel Human Handoff Router",
+        "Getnet Technical Support & Field Service CRM",
+    ):
+        if src_name not in sources:
+            sources.append(src_name)
+
+    pending_text = _format_pending_handoff_message(user_id, thread_id, interrupt_payload)
+    conf = min(float(state_snapshot.get("confidence_score") or 0.48), 0.48)
+
+    finalized_trace = trace_recorder.finalize_trace(
+        trace_id,
+        routed_agents=routed,
+        tools_used=tools,
+        sources=sources,
+        confidence_score=conf,
+        guardrail_triggered=False,
+        handoff_required=True,
+        final_response=pending_text,
+        status="escalated",
+    )
+
+    session_store.add_message(user_id=user_id, role="user", content=message)
+    session_store.add_message(
+        user_id=user_id, role="assistant", content=finalized_trace.final_response
+    )
+
+    return {
+        "response": finalized_trace.final_response,
+        "user_id": user_id,
+        "routed_agents": finalized_trace.routed_agents,
+        "tools_used": finalized_trace.tools_used,
+        "sources": finalized_trace.sources,
+        "confidence_score": finalized_trace.confidence_score,
+        "guardrail_triggered": False,
+        "handoff_required": True,
+        "handoff_status": "pending_human_review",
+        "thread_id": thread_id,
+        "human_decision": None,
+        "trace_id": finalized_trace.trace_id,
+        "latency_ms": finalized_trace.total_latency_ms,
+        "effective_slo_target_ms": finalized_trace.effective_slo_target_ms,
+        "slo_tier": finalized_trace.slo_tier,
+        "slo_violated": finalized_trace.slo_violated,
+        "total_tokens": finalized_trace.total_tokens,
+        "prompt_tokens": finalized_trace.prompt_tokens,
+        "completion_tokens": finalized_trace.completion_tokens,
+        "router_plan": state_snapshot.get("router_plan") or {},
+        "retrieved_contexts": _extract_retrieved_contexts(
+            list(state_snapshot.get("agent_outputs") or [])
+        )
+        or [pending_text],
+        "chat_history": session_store.get_history(user_id),
+    }
+
+
+def _extract_retrieved_contexts(agent_outputs: list[dict[str, Any]]) -> list[str]:
+    """Collect retrieved RAG chunks, web snippets, or tool outputs as evaluation contexts."""
+    contexts: list[str] = []
+    for step in agent_outputs:
+        raw = step.get("raw_data") or {}
+        rag_block = raw.get("rag") or {}
+        chunks = rag_block.get("chunks") or []
+        for chunk in chunks:
+            text = str(chunk.get("content") or "").strip()
+            if text and text not in contexts:
+                contexts.append(text)
+        web_block = raw.get("web") or {}
+        web_summary = str(web_block.get("summary") or "").strip()
+        if web_summary and web_summary not in contexts:
+            contexts.append(web_summary)
+        if not chunks and not web_summary:
+            content = str(step.get("content") or "").strip()
+            if content and content not in contexts:
+                contexts.append(content)
+    return contexts
 
 
 @traceable_step(name="getnet_multi_agent_orchestration", run_type="chain")
@@ -474,16 +668,19 @@ def execute_orchestration(
     message: str,
     user_id: str,
     trace_id: str | None = None,
+    thread_id: str | None = None,
 ) -> dict[str, Any]:
-    """Run an incoming user request end-to-end through the LangGraph orchestration and record trace."""
+    """Run an incoming user request end-to-end through the LangGraph orchestration with checkpointing."""
     trace = trace_recorder.create_trace(
         user_id=user_id,
         message=message,
         trace_id=trace_id,
     )
+    resolved_thread_id = thread_id or f"thr-{trace.trace_id}"
 
     initial_state: OrchestrationState = {
         "trace_id": trace.trace_id,
+        "thread_id": resolved_thread_id,
         "user_id": user_id,
         "message": message,
         "language": "en",
@@ -497,6 +694,8 @@ def execute_orchestration(
         "sources": [],
         "confidence_score": 1.0,
         "handoff_required": False,
+        "handoff_status": "none",
+        "human_decision": None,
         "escalation_details": None,
         "final_response": "",
         "chat_history": session_store.get_history(user_id),
@@ -504,7 +703,23 @@ def execute_orchestration(
     }
 
     graph = get_orchestration_graph()
-    final_state: OrchestrationState = graph.invoke(initial_state)
+    config = {"configurable": {"thread_id": resolved_thread_id}}
+    final_state: dict[str, Any] = graph.invoke(initial_state, config=config)
+
+    interrupts = final_state.get("__interrupt__")
+    if interrupts:
+        first_int = interrupts[0]
+        int_val = getattr(first_int, "value", first_int)
+        if not isinstance(int_val, dict):
+            int_val = {"protocol_id": "ESC-GN-PENDING", "ticket_id": "TCK-2026-ESC"}
+        return _build_interrupted_result(
+            trace_id=trace.trace_id,
+            thread_id=resolved_thread_id,
+            user_id=user_id,
+            message=message,
+            state_snapshot=final_state,
+            interrupt_payload=int_val,
+        )
 
     finalized_trace = trace_recorder.finalize_trace(
         trace.trace_id,
@@ -517,7 +732,6 @@ def execute_orchestration(
         final_response=str(final_state.get("final_response") or ""),
     )
 
-    # Persist completed turn to session memory store
     session_store.add_message(user_id=user_id, role="user", content=message)
     session_store.add_message(
         user_id=user_id, role="assistant", content=finalized_trace.final_response
@@ -532,6 +746,9 @@ def execute_orchestration(
         "confidence_score": finalized_trace.confidence_score,
         "guardrail_triggered": finalized_trace.guardrail_triggered,
         "handoff_required": finalized_trace.handoff_required,
+        "handoff_status": str(final_state.get("handoff_status") or "none"),
+        "thread_id": resolved_thread_id,
+        "human_decision": final_state.get("human_decision"),
         "trace_id": finalized_trace.trace_id,
         "latency_ms": finalized_trace.total_latency_ms,
         "effective_slo_target_ms": finalized_trace.effective_slo_target_ms,
@@ -541,6 +758,98 @@ def execute_orchestration(
         "prompt_tokens": finalized_trace.prompt_tokens,
         "completion_tokens": finalized_trace.completion_tokens,
         "router_plan": final_state.get("router_plan") or {},
+        "retrieved_contexts": _extract_retrieved_contexts(
+            list(final_state.get("agent_outputs") or [])
+        ),
+        "chat_history": session_store.get_history(user_id),
+    }
+
+
+@traceable_step(name="getnet_hitl_resume", run_type="chain")
+def resume_orchestration(
+    thread_id: str,
+    *,
+    decision: str,
+    operator_id: str,
+    operator_note: str,
+) -> dict[str, Any]:
+    """Resume a paused HITL LangGraph checkpoint using Command(resume=...)."""
+    existing = handoff_store.get(thread_id)
+    if existing is None:
+        raise KeyError(f"Handoff thread '{thread_id}' not found.")
+    if existing.get("status") != "pending_human_review":
+        raise ValueError(f"Handoff thread '{thread_id}' is already resolved.")
+
+    user_id = str(existing["user_id"])
+    resume_trace = trace_recorder.create_trace(
+        user_id=user_id,
+        message=f"[HITL RESUME {thread_id}] ({decision}): {operator_note}",
+    )
+
+    graph = get_orchestration_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+    snapshot = graph.get_state(config)
+    if snapshot is None or not snapshot.values:
+        raise KeyError(f"Checkpoint for thread '{thread_id}' is unavailable.")
+
+    resume_payload = {
+        "decision": decision,
+        "operator_id": operator_id,
+        "operator_note": operator_note,
+    }
+    final_state: dict[str, Any] = graph.invoke(
+        Command(resume=resume_payload),
+        config=config,
+    )
+
+    final_text = str(final_state.get("final_response") or "")
+    finalized_trace = trace_recorder.finalize_trace(
+        resume_trace.trace_id,
+        routed_agents=list(final_state.get("routed_agents") or []),
+        tools_used=list(final_state.get("tools_used") or []),
+        sources=list(final_state.get("sources") or []),
+        confidence_score=float(final_state.get("confidence_score") or 0.48),
+        guardrail_triggered=False,
+        handoff_required=True,
+        final_response=final_text,
+        status="escalated",
+    )
+
+    handoff_store.mark_resolved(
+        thread_id=thread_id,
+        decision=decision,
+        operator_id=operator_id,
+        operator_note=operator_note,
+        final_response=finalized_trace.final_response,
+    )
+    session_store.add_message(
+        user_id=user_id, role="assistant", content=finalized_trace.final_response
+    )
+
+    return {
+        "response": finalized_trace.final_response,
+        "user_id": user_id,
+        "routed_agents": finalized_trace.routed_agents,
+        "tools_used": finalized_trace.tools_used,
+        "sources": finalized_trace.sources,
+        "confidence_score": finalized_trace.confidence_score,
+        "guardrail_triggered": False,
+        "handoff_required": True,
+        "handoff_status": "resolved",
+        "thread_id": thread_id,
+        "human_decision": final_state.get("human_decision") or resume_payload,
+        "trace_id": finalized_trace.trace_id,
+        "latency_ms": finalized_trace.total_latency_ms,
+        "effective_slo_target_ms": finalized_trace.effective_slo_target_ms,
+        "slo_tier": finalized_trace.slo_tier,
+        "slo_violated": finalized_trace.slo_violated,
+        "total_tokens": finalized_trace.total_tokens,
+        "prompt_tokens": finalized_trace.prompt_tokens,
+        "completion_tokens": finalized_trace.completion_tokens,
+        "router_plan": final_state.get("router_plan") or {},
+        "retrieved_contexts": _extract_retrieved_contexts(
+            list(final_state.get("agent_outputs") or [])
+        ),
         "chat_history": session_store.get_history(user_id),
     }
 
@@ -549,22 +858,26 @@ async def execute_orchestration_stream(
     message: str,
     user_id: str,
     trace_id: str | None = None,
+    thread_id: str | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
-    """Execute the multi-agent graph, streaming node lifecycle events and real-time tokens."""
+    """Stream compiled LangGraph orchestration node updates, token output, and HITL interrupt events."""
     trace = trace_recorder.create_trace(
         user_id=user_id,
         message=message,
         trace_id=trace_id,
     )
+    resolved_thread_id = thread_id or f"thr-{trace.trace_id}"
 
     yield {
         "event": "start",
         "trace_id": trace.trace_id,
+        "thread_id": resolved_thread_id,
         "user_id": user_id,
     }
 
-    state: OrchestrationState = {
+    initial_state: OrchestrationState = {
         "trace_id": trace.trace_id,
+        "thread_id": resolved_thread_id,
         "user_id": user_id,
         "message": message,
         "language": "en",
@@ -578,106 +891,92 @@ async def execute_orchestration_stream(
         "sources": [],
         "confidence_score": 1.0,
         "handoff_required": False,
+        "handoff_status": "none",
+        "human_decision": None,
         "escalation_details": None,
         "final_response": "",
         "chat_history": session_store.get_history(user_id),
         "rewritten_query": message,
     }
 
-    # Step 1: Input Guardrail
-    yield {"event": "node_started", "node": "input_guardrail"}
-    in_update = _input_guardrail_node(state)
-    state.update(in_update)
-    is_blocked = bool(state.get("guardrail_triggered", False))
-    yield {
-        "event": "node_completed",
-        "node": "input_guardrail",
-        "blocked": is_blocked,
-    }
+    graph = get_orchestration_graph()
+    config = {"configurable": {"thread_id": resolved_thread_id}}
+    state: dict[str, Any] = dict(initial_state)
+    interrupted_payload: dict[str, Any] | None = None
 
-    if is_blocked:
-        yield {"event": "node_started", "node": "output_guardrail"}
-        out_update = _output_guardrail_node(state)
-        state.update(out_update)
-        yield {"event": "node_completed", "node": "output_guardrail"}
-    else:
-        # Step 2: Router Agent
-        yield {"event": "node_started", "node": "router_agent"}
-        router_update = _router_agent_node(state)
-        state.update(router_update)
-        plan = state.get("router_plan") or {}
-        yield {
-            "event": "node_completed",
-            "node": "router_agent",
-            "routed_agents": list(state.get("agent_queue") or []),
-            "primary_intent": plan.get("primary_intent"),
-        }
+    for chunk in graph.stream(initial_state, config=config, stream_mode="updates"):
+        if "__interrupt__" in chunk:
+            ints = chunk["__interrupt__"]
+            first = ints[0] if ints else {}
+            int_val = getattr(first, "value", first)
+            interrupted_payload = (
+                dict(int_val)
+                if isinstance(int_val, dict)
+                else {"protocol_id": "ESC-GN-PENDING", "ticket_id": "TCK-2026-ESC"}
+            )
+            yield {"event": "node_started", "node": "escalation_agent"}
+            yield {
+                "event": "node_completed",
+                "node": "escalation_agent",
+                "tools_used": ["dispatch_human_handoff", "manage_support_ticket"],
+                "handoff_status": "pending_human_review",
+            }
+            yield {
+                "event": "interrupt",
+                "thread_id": resolved_thread_id,
+                "handoff_status": "pending_human_review",
+                "data": interrupted_payload,
+            }
+            break
 
-        # Step 3: Domain Specialists Loop
-        while True:
-            next_step = _dispatch_next_from_queue(state)
-            if next_step == "personality_agent":
-                break
-            elif next_step == "knowledge_agent":
-                yield {"event": "node_started", "node": "knowledge_agent"}
-                k_update = _knowledge_agent_node(state)
-                state.update(k_update)
+        for node_name, update in chunk.items():
+            if not isinstance(update, dict):
+                continue
+            yield {"event": "node_started", "node": node_name}
+            state.update(update)
+
+            if node_name == "input_guardrail":
                 yield {
                     "event": "node_completed",
-                    "node": "knowledge_agent",
-                    "tools_used": list(k_update.get("tools_used") or []),
-                    "confidence": k_update.get("confidence_score"),
+                    "node": "input_guardrail",
+                    "blocked": bool(state.get("guardrail_triggered", False)),
                 }
-            elif next_step == "customer_support_agent":
-                yield {"event": "node_started", "node": "customer_support_agent"}
-                s_update = _customer_support_agent_node(state)
-                state.update(s_update)
+            elif node_name == "router_agent":
+                plan = state.get("router_plan") or {}
                 yield {
                     "event": "node_completed",
-                    "node": "customer_support_agent",
-                    "tools_used": list(s_update.get("tools_used") or []),
-                    "confidence": s_update.get("confidence_score"),
+                    "node": "router_agent",
+                    "routed_agents": list(state.get("agent_queue") or []),
+                    "primary_intent": plan.get("primary_intent"),
                 }
-            elif next_step == "escalation_agent":
-                yield {"event": "node_started", "node": "escalation_agent"}
-                e_update = _escalation_agent_node(state)
-                state.update(e_update)
-                yield {
-                    "event": "node_completed",
-                    "node": "escalation_agent",
-                    "tools_used": list(e_update.get("tools_used") or []),
-                    "confidence": e_update.get("confidence_score"),
-                }
+            elif node_name == "personality_agent":
+                final_txt = str(state.get("final_response") or "")
+                words = final_txt.split(" ")
+                for idx, word in enumerate(words):
+                    yield {
+                        "event": "token",
+                        "token": word if idx == len(words) - 1 else f"{word} ",
+                    }
+                yield {"event": "node_completed", "node": "personality_agent"}
             else:
-                break
+                yield {
+                    "event": "node_completed",
+                    "node": node_name,
+                    "tools_used": list(update.get("tools_used") or state.get("tools_used") or []),
+                    "confidence": update.get("confidence_score", state.get("confidence_score")),
+                }
 
-        # Step 4: Personality Agent (Token Streaming)
-        yield {"event": "node_started", "node": "personality_agent"}
-        routed = list(state.get("routed_agents") or [])
-        routed.append("personality_agent")
-        state["routed_agents"] = routed
-
-        full_response_parts: list[str] = []
-        for token_chunk in stream_personality_agent(
-            message=state.get("rewritten_query") or state["message"],
-            user_id=state["user_id"],
-            agent_outputs=list(state.get("agent_outputs") or []),
-            language=str(state.get("language") or "en"),
-            handoff_required=bool(state.get("handoff_required", False)),
-            chat_history=state.get("chat_history") or [],
-        ):
-            full_response_parts.append(token_chunk)
-            yield {"event": "token", "token": token_chunk}
-
-        synthesized_text = "".join(full_response_parts).strip()
-        state["final_response"] = synthesized_text
-        yield {"event": "node_completed", "node": "personality_agent"}
-
-        # Step 5: Output Guardrail
-        yield {"event": "node_started", "node": "output_guardrail"}
-        out_update = _output_guardrail_node(state)
-        state.update(out_update)
-        yield {"event": "node_completed", "node": "output_guardrail"}
+    if interrupted_payload is not None:
+        paused_payload = _build_interrupted_result(
+            trace_id=trace.trace_id,
+            thread_id=resolved_thread_id,
+            user_id=user_id,
+            message=message,
+            state_snapshot=state,
+            interrupt_payload=interrupted_payload,
+        )
+        yield {"event": "final_result", "data": paused_payload}
+        return
 
     finalized_trace = trace_recorder.finalize_trace(
         trace.trace_id,
@@ -704,6 +1003,9 @@ async def execute_orchestration_stream(
         "confidence_score": finalized_trace.confidence_score,
         "guardrail_triggered": finalized_trace.guardrail_triggered,
         "handoff_required": finalized_trace.handoff_required,
+        "handoff_status": str(state.get("handoff_status") or "none"),
+        "thread_id": resolved_thread_id,
+        "human_decision": state.get("human_decision"),
         "trace_id": finalized_trace.trace_id,
         "latency_ms": finalized_trace.total_latency_ms,
         "effective_slo_target_ms": finalized_trace.effective_slo_target_ms,
@@ -713,6 +1015,9 @@ async def execute_orchestration_stream(
         "prompt_tokens": finalized_trace.prompt_tokens,
         "completion_tokens": finalized_trace.completion_tokens,
         "router_plan": state.get("router_plan") or {},
+        "retrieved_contexts": _extract_retrieved_contexts(
+            list(state.get("agent_outputs") or [])
+        ),
         "chat_history": session_store.get_history(user_id),
     }
 

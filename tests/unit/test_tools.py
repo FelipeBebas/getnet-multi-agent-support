@@ -231,3 +231,27 @@ def test_web_search_general_resilience_on_empty_hits(monkeypatch) -> None:
     assert res["verified_results"] is False
     assert res["results"] == []
     assert res["sources"] == []
+
+
+def test_ticket_store_sqlite_persistence_across_reloads(tmp_path) -> None:
+    """Verify runtime support tickets persist to SQLite and survive store reload."""
+    from src.tools.support_tools import TicketStore
+
+    db_file = tmp_path / "tickets.db"
+    store_a = TicketStore(db_path=db_file)
+    store_a.add_ticket(
+        {
+            "ticket_id": "TCK-2026-PERSIST1",
+            "user_id": "merchant_sql",
+            "status": "OPEN_IN_PROGRESS",
+            "category": "POS_TECHNICAL_SUPPORT",
+            "summary": "Terminal swap test",
+            "sla_target": "24h",
+            "created_at": "2026-11-18T12:00:00+00:00",
+        }
+    )
+
+    store_b = TicketStore(db_path=db_file)
+    tickets = store_b.list_for_user("merchant_sql")
+    assert len(tickets) == 1
+    assert tickets[0]["ticket_id"] == "TCK-2026-PERSIST1"

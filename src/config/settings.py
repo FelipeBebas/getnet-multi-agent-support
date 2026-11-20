@@ -180,6 +180,82 @@ class Settings(BaseSettings):
         description="Maximum number of recent traces retained in the in-memory ring buffer.",
     )
 
+    # --- Security, Auth (JWT/RBAC), Rate Limiting & Token Budgets ---
+    auth_jwt_secret: str = Field(
+        default="getnet-dev-jwt-secret-change-in-production-32b",
+        description="HMAC secret used to sign and verify Bearer JWT access tokens.",
+    )
+    auth_jwt_algorithm: str = Field(
+        default="HS256",
+        description="JWT signing algorithm.",
+    )
+    auth_token_ttl_seconds: int = Field(
+        default=3600,
+        ge=60,
+        le=86400 * 30,
+        description="Access token lifetime in seconds.",
+    )
+    auth_allow_dev_token_endpoint: bool = Field(
+        default=True,
+        description="Allow POST /auth/token in non-production environments or with bootstrap key.",
+    )
+    auth_bootstrap_api_key: str = Field(
+        default="getnet-bootstrap-operator-key",
+        description="Bootstrap API key accepted by POST /auth/token for operator/admin issuance.",
+    )
+    rate_limit_requests_per_minute: int = Field(
+        default=60,
+        ge=1,
+        le=10000,
+        description="Maximum HTTP chat/eval requests per caller within the sliding window.",
+    )
+    rate_limit_window_seconds: int = Field(
+        default=60,
+        ge=1,
+        le=3600,
+        description="Sliding window duration in seconds for API rate limiting.",
+    )
+    daily_token_budget_per_user: int = Field(
+        default=250000,
+        ge=100,
+        description="Daily LLM token budget cap per user_id (anti-token maxxing).",
+    )
+    max_tokens_per_request: int = Field(
+        default=16000,
+        ge=100,
+        description="Maximum cumulative LLM tokens allowed for a single orchestration request.",
+    )
+    max_message_length: int = Field(
+        default=4000,
+        ge=50,
+        le=32000,
+        description="Maximum character length accepted in ChatRequest.message.",
+    )
+
+    # --- Persistent Runtime Storage & HITL Checkpointing ---
+    runtime_db_path: str = Field(
+        default="data/runtime/getnet_runtime.db",
+        description="SQLite database path for persistent session memory, tickets, and HITL metadata (or ':memory:').",
+    )
+    hitl_checkpoint_db_path: str = Field(
+        default="data/runtime/hitl_checkpoints.db",
+        description="SQLite database path for LangGraph HITL SqliteSaver checkpoints (or ':memory:').",
+    )
+
+    # --- Quantitative Evaluation (Ragas) Thresholds ---
+    eval_min_faithfulness: float = Field(
+        default=0.70,
+        ge=0.0,
+        le=1.0,
+        description="Minimum aggregate faithfulness score required when --enforce-thresholds is enabled.",
+    )
+    eval_max_hallucination_rate: float = Field(
+        default=0.30,
+        ge=0.0,
+        le=1.0,
+        description="Maximum allowed aggregate hallucination rate (1 - faithfulness) in CI quality gate.",
+    )
+
     @property
     def has_openai_key(self) -> bool:
         """Return True when a valid-looking OpenAI API key is configured."""

@@ -2,6 +2,156 @@
 
 from __future__ import annotations
 
+DASHBOARD_LOGIN_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Getnet AI Ops · Operator Sign In</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 20px;
+    }
+    .login-card {
+      width: 100%;
+      max-width: 440px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 14px;
+      padding: 28px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+      font-weight: 700;
+      font-size: 18px;
+    }
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+      background: #EC0000;
+      display: inline-block;
+    }
+    p {
+      color: #94a3b8;
+      font-size: 13px;
+      line-height: 1.5;
+      margin: 0 0 18px 0;
+    }
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: #cbd5e1;
+      margin-bottom: 6px;
+    }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid #475569;
+      background: #0f172a;
+      color: #f8fafc;
+      font-size: 13px;
+      margin-bottom: 14px;
+    }
+    button {
+      width: 100%;
+      padding: 11px 16px;
+      border: none;
+      border-radius: 8px;
+      background: #EC0000;
+      color: #ffffff;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    button:hover { background: #c80000; }
+    .err {
+      margin-top: 12px;
+      color: #fca5a5;
+      font-size: 12px;
+      min-height: 16px;
+    }
+    .hint {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid #334155;
+      font-size: 11px;
+      color: #94a3b8;
+    }
+    code { color: #f8fafc; background: #0f172a; padding: 2px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div class="login-card">
+    <div class="brand"><span class="dot"></span> Getnet Multi-Agent Ops Console</div>
+    <p>RBAC protection enabled. Sign in with an <strong>operator</strong> Bearer JWT or the bootstrap key to open the observability dashboard and HITL queue.</p>
+    <form id="loginForm" onsubmit="submitLogin(event)">
+      <label for="opUser">Operator User ID</label>
+      <input id="opUser" value="operator_1" required />
+
+      <label for="bootstrapKey">Bootstrap Key (<code>X-Bootstrap-Key</code>)</label>
+      <input id="bootstrapKey" type="password" placeholder="e.g. getnet-bootstrap-operator-key" />
+
+      <label for="bearerJwt">Or paste an existing Operator Bearer JWT</label>
+      <input id="bearerJwt" type="password" placeholder="eyJ..." />
+
+      <button type="submit">Authenticate &amp; Open Dashboard</button>
+      <div class="err" id="errBox"></div>
+    </form>
+    <div class="hint">
+      Public probes remain available at <a href="/health" style="color:#93c5fd;">/health</a> and <a href="/docs" style="color:#93c5fd;">/docs</a>.
+    </div>
+  </div>
+  <script>
+    async function submitLogin(e) {
+      e.preventDefault();
+      const errBox = document.getElementById('errBox');
+      errBox.textContent = '';
+      const userId = document.getElementById('opUser').value.trim() || 'operator_1';
+      const bootstrapKey = document.getElementById('bootstrapKey').value.trim();
+      const accessToken = document.getElementById('bearerJwt').value.trim();
+      try {
+        const res = await fetch('/auth/session', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_id: userId,
+            role: 'operator',
+            bootstrap_key: bootstrapKey || null,
+            access_token: accessToken || null
+          })
+        });
+        const body = await res.json();
+        if (!res.ok) {
+          throw new Error(body.detail || ('HTTP ' + res.status));
+        }
+        window.location.href = '/dashboard';
+      } catch (err) {
+        errBox.textContent = err.message || 'Authentication failed';
+      }
+    }
+  </script>
+</body>
+</html>
+"""
+
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1734,6 +1884,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <summary>Inspect raw telemetry</summary>
         <pre class="code-viewer" id="telemetryJsonViewer"></pre>
       </details>
+
+      <!-- Operator RBAC Auth & HITL Pending Review Queue -->
+      <div class="chart-container-card" style="margin-top: 18px;">
+        <div class="chart-header">
+          <div class="chart-title-group">
+            <div class="chart-title">
+              <span>Operator Security & HITL Review Queue</span>
+            </div>
+            <div class="chart-subtitle">Bearer JWT authentication (RBAC) and paused LangGraph interrupt() checkpoints awaiting specialist decision</div>
+          </div>
+          <div class="chart-actions" style="gap: 8px; flex-wrap: wrap;">
+            <input class="text-input" id="operatorTokenInput" type="password" placeholder="Optional Bearer JWT override" style="min-width: 220px;" />
+            <button class="btn-chart-reset" type="button" onclick="saveAuthToken()">Apply Token</button>
+            <button class="btn-chart-reset" type="button" onclick="fetchPendingHandoffs()">Refresh HITL Queue</button>
+            <button class="btn-chart-reset" type="button" onclick="logoutSession()">Sign Out</button>
+          </div>
+        </div>
+        <div id="hitlQueueContainer" style="padding: 12px 4px; font-size: 13px; color: var(--text-muted);">
+          No pending human-in-the-loop checkpoints.
+        </div>
+      </div>
     </div>
 
     <!-- Professional Architecture & Author Footer (Item 14) -->
@@ -2047,7 +2218,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       try {
         const response = await fetch('/chat/stream', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ message, user_id: userId })
         });
 
@@ -2131,11 +2302,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               } else if (event.event === 'token') {
                 streamedText += event.token;
                 ansBox.innerHTML = renderMarkdown(streamedText);
+              } else if (event.event === 'interrupt') {
+                setNodeState('escalation_agent', 'escalated', 'Paused HITL');
+                fetchPendingHandoffs();
               } else if (event.event === 'final_result') {
                 const data = event.data;
                 recordSessionExecution(data, message);
                 renderResult(data);
                 fetchTelemetry();
+                fetchPendingHandoffs();
               }
             } catch (pErr) {
               console.warn('SSE chunk parse error', pErr, jsonStr);
@@ -2147,7 +2322,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         try {
           const fbRes = await fetch('/chat', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ message, user_id: userId })
           });
           const fbData = await fbRes.json();
@@ -2370,7 +2545,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     async function fetchInitialTraces() {
       try {
-        const res = await fetch('/traces?limit=25');
+        const res = await fetch('/traces?limit=25', { headers: getAuthHeaders() });
         if (res.ok) {
           const data = await res.json();
           const traces = data.traces || [];
@@ -2604,9 +2779,96 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       });
     }
 
+    function getAuthHeaders(extra = {}) {
+      const tok = sessionStorage.getItem('getnet_jwt') || '';
+      const base = { ...extra };
+      if (tok) {
+        base['Authorization'] = 'Bearer ' + tok;
+      }
+      return base;
+    }
+
+    function saveAuthToken() {
+      const inp = document.getElementById('operatorTokenInput');
+      if (!inp) return;
+      const val = (inp.value || '').trim();
+      if (val) {
+        sessionStorage.setItem('getnet_jwt', val);
+      } else {
+        sessionStorage.removeItem('getnet_jwt');
+      }
+      fetchTelemetry();
+      fetchInitialTraces();
+      fetchPendingHandoffs();
+    }
+
+    async function logoutSession() {
+      sessionStorage.removeItem('getnet_jwt');
+      try {
+        await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' });
+      } catch (e) {
+        console.warn('Logout failed', e);
+      }
+      window.location.href = '/dashboard';
+    }
+
+    async function fetchPendingHandoffs() {
+      const container = document.getElementById('hitlQueueContainer');
+      if (!container) return;
+      try {
+        const res = await fetch('/handoffs?status=pending_human_review', { headers: getAuthHeaders() });
+        if (!res.ok) {
+          container.textContent = 'Authenticate with an operator Bearer JWT to view HITL checkpoints.';
+          return;
+        }
+        const data = await res.json();
+        const items = data.handoffs || [];
+        if (!items.length) {
+          container.textContent = 'No pending human-in-the-loop checkpoints.';
+          return;
+        }
+        container.innerHTML = items.map(item => `
+          <div style="border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap;">
+            <div>
+              <strong>${item.protocol_id}</strong> · <code>${item.thread_id}</code> · User: <strong>${item.user_id}</strong> · Risk: <strong>${item.risk_tier}</strong>
+              <div style="margin-top: 4px; color: var(--text-main);">${item.message_preview}</div>
+            </div>
+            <div style="display: flex; gap: 6px; align-items: center;">
+              <input class="text-input" id="note_${item.thread_id}" placeholder="Specialist guidance note" style="min-width: 200px;" />
+              <button class="btn-chart-reset" type="button" onclick="resumeHandoff('${item.thread_id}')">Approve & Resume</button>
+            </div>
+          </div>
+        `).join('');
+      } catch (e) {
+        console.warn('HITL queue fetch failed', e);
+      }
+    }
+
+    async function resumeHandoff(threadId) {
+      const noteEl = document.getElementById('note_' + threadId);
+      const note = (noteEl && noteEl.value.trim()) ? noteEl.value.trim() : 'Approved by operator specialist.';
+      try {
+        const res = await fetch('/handoffs/' + encodeURIComponent(threadId) + '/resume', {
+          method: 'POST',
+          headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ decision: 'approved', operator_note: note })
+        });
+        if (!res.ok) {
+          throw new Error('HTTP ' + res.status);
+        }
+        const data = await res.json();
+        renderResult(data);
+        fetchPendingHandoffs();
+        fetchTelemetry();
+      } catch (err) {
+        alert('Failed to resume handoff: ' + err.message);
+      }
+    }
+
     async function fetchTelemetry() {
       try {
-        const res = await fetch('/metrics');
+        const res = await fetch('/metrics', { headers: getAuthHeaders() });
+        if (!res.ok) return;
         const data = await res.json();
         document.getElementById('kpiRequests').textContent = data.total_requests || 0;
         document.getElementById('kpiLatency').textContent = (data.average_latency_ms || 0).toFixed(1);
@@ -2619,10 +2881,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     window.addEventListener('load', () => {
+      const savedTok = sessionStorage.getItem('getnet_jwt');
+      const tokInp = document.getElementById('operatorTokenInput');
+      if (tokInp && savedTok) tokInp.value = savedTok;
       drawConnectors([]);
       fetchHealth();
       fetchTelemetry();
       fetchInitialTraces();
+      fetchPendingHandoffs();
       setupChartTooltip();
 
       if (window.ResizeObserver) {

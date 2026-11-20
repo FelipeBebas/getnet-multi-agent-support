@@ -89,7 +89,53 @@ def test_e2e_high_risk_dispute_query_with_low_confidence_triggers_escalation(
         user_id="cliente1988",
     )
 
-    # Low confidence triggers escalation for high-risk dispute
+    # Low confidence triggers escalation for high-risk dispute and pauses via interrupt()
     assert out["confidence_score"] < 0.60
     assert out["handoff_required"] is True
+    assert out["handoff_status"] == "pending_human_review"
+    assert out["thread_id"]
     assert "escalation_agent" in out["routed_agents"]
+
+
+def test_e2e_hitl_interrupt_pause_and_command_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify LangGraph interrupt() pauses on escalation and Command(resume=...) completes to personality_agent."""
+    import src.orchestration.graph as graph_module
+    from src.orchestration.graph import resume_orchestration
+    from src.orchestration.persistence import handoff_store
+
+    handoff_store.clear()
+
+    def _mock_run_knowledge_low_conf(message: str, sub_intent: str, chat_history: list | None = None) -> AgentStepOutput:
+        return AgentStepOutput(
+            agent_name="knowledge_agent",
+            content="Não foi possível verificar o bloqueio de recebíveis. [INSUFFICIENT_EVIDENCE]",
+            tools_used=["retrieve_getnet_knowledge"],
+            sources=[],
+            confidence=0.45,
+            handoff_required=False,
+        )
+
+    monkeypatch.setattr(graph_module, "run_knowledge_agent", _mock_run_knowledge_low_conf)
+
+    paused = execute_orchestration(
+        message="Contestação de bloqueio de fraude na conta",
+        user_id="cliente1988",
+    )
+    assert paused["handoff_required"] is True
+    assert paused["handoff_status"] == "pending_human_review"
+    thread_id = paused["thread_id"]
+    assert "personality_agent" not in paused["routed_agents"]
+
+    resumed = resume_orchestration(
+        thread_id,
+        decision="approved",
+        operator_id="op_senior",
+        operator_note="Receivables hold cleared after KYC confirmation.",
+    )
+    assert resumed["handoff_required"] is True
+    assert resumed["handoff_status"] == "resolved"
+    assert resumed["human_decision"]["decision"] == "approved"
+    assert "personality_agent" in resumed["routed_agents"]
+    assert "Receivables hold cleared after KYC confirmation." in resumed["response"]

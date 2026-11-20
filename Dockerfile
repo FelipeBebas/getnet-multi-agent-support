@@ -15,17 +15,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# Create non-root runtime user
+RUN groupadd --system appuser && useradd --system --gid appuser --home /app --shell /sbin/nologin appuser
+
 COPY requirements.txt pyproject.toml ./
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
 COPY src/ ./src/
 COPY data/ ./data/
 COPY scripts/ ./scripts/
-COPY tests/ ./tests/
-COPY .env.example ./.env.example
 
-# Pre-seed the persistent ChromaDB knowledge base during image build
-RUN python scripts/ingest_kb.py --skip-live-scrape
+# Pre-seed the persistent ChromaDB knowledge base and prepare writable runtime dirs
+RUN mkdir -p /app/data/runtime /app/logs \
+    && python scripts/ingest_kb.py --skip-live-scrape \
+    && chown -R appuser:appuser /app
+
+USER appuser
 
 EXPOSE 8000
 

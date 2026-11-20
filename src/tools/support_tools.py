@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -13,10 +15,81 @@ from langchain_core.tools import tool
 from src.config.settings import settings
 from src.observability.logger import get_logger
 from src.observability.tracer import traceable_step
+from src.orchestration.persistence import open_sqlite_connection, resolve_sqlite_target
 
 logger = get_logger("tools.support_tools")
 
-_RUNTIME_CREATED_TICKETS: dict[str, list[dict[str, Any]]] = {}
+
+class TicketStore:
+    """SQLite-backed runtime support ticket repository."""
+
+    def __init__(self, db_path: str | Path | None = None) -> None:
+        self._explicit_db_path = db_path
+        self._lock = threading.Lock()
+        self._conn: sqlite3.Connection | None = None
+        self._active_target: str | None = None
+
+    def _get_conn(self) -> sqlite3.Connection:
+        target = resolve_sqlite_target(self._explicit_db_path)
+        if self._conn is None or self._active_target != target:
+            if self._conn is not None:
+                self._conn.close()
+            self._conn = open_sqlite_connection(target)
+            self._active_target = target
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS support_tickets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticket_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    sla_target TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tickets_user_id ON support_tickets(user_id, id)"
+            )
+            self._conn.commit()
+        return self._conn
+
+    def list_for_user(self, user_id: str) -> list[dict[str, Any]]:
+        """Return runtime-created tickets for a given merchant user_id."""
+        with self._lock:
+            conn = self._get_conn()
+            rows = conn.execute(
+                "SELECT ticket_id, user_id, status, category, summary, sla_target, created_at "
+                "FROM support_tickets WHERE user_id = ? ORDER BY id ASC",
+                (user_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def add_ticket(self, ticket: dict[str, Any]) -> None:
+        """Persist a newly created runtime ticket."""
+        with self._lock:
+            conn = self._get_conn()
+            conn.execute(
+                """
+                INSERT INTO support_tickets (ticket_id, user_id, status, category, summary, sla_target, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    ticket["ticket_id"],
+                    ticket["user_id"],
+                    ticket["status"],
+                    ticket["category"],
+                    ticket["summary"],
+                    ticket["sla_target"],
+                    ticket["created_at"],
+                ),
+            )
+            conn.commit()
+
+
+_ticket_store = TicketStore()
 
 
 def load_merchants_db(path: str | Path | None = None) -> dict[str, dict[str, Any]]:
@@ -181,7 +254,7 @@ def manage_support_ticket(
     existing_tickets: list[dict[str, Any]] = []
     if record is not None:
         existing_tickets.extend(record.get("tickets") or [])
-    existing_tickets.extend(_RUNTIME_CREATED_TICKETS.get(clean_uid, []))
+    existing_tickets.extend(_ticket_store.list_for_user(clean_uid))
 
     created_ticket: dict[str, Any] | None = None
     if norm_action in ("create", "open"):
@@ -196,7 +269,7 @@ def manage_support_ticket(
             "sla_target": "Remote APN/Switch reset within 2h; onsite terminal replacement within 24h if hardware fault persists",
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        _RUNTIME_CREATED_TICKETS.setdefault(clean_uid, []).append(created_ticket)
+        _ticket_store.add_ticket(created_ticket)
         existing_tickets.append(created_ticket)
     elif norm_action == "check_or_create":
         if not existing_tickets:
@@ -211,7 +284,7 @@ def manage_support_ticket(
                 "sla_target": "Remote APN/Switch reset within 2h; onsite terminal replacement within 24h if hardware fault persists",
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
-            _RUNTIME_CREATED_TICKETS.setdefault(clean_uid, []).append(created_ticket)
+            _ticket_store.add_ticket(created_ticket)
             existing_tickets.append(created_ticket)
 
     if created_ticket:
