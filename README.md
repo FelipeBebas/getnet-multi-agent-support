@@ -27,18 +27,6 @@ Fintech production-hardened, **Spec-Driven Multi-Agent Support System** engineer
 
 ---
 
-## Video Presentation & Walkthrough (v1 Baseline)
-
-[![Getnet Multi-Agent Solution Walkthrough](docs/assets/video-thumbnail.png)](https://drive.google.com/file/d/1MhL4jDibYF79vLd7Dm_1SuRnT12zpLuW/view?usp=sharing)
-
-<p align="center">
-  <em><b><a href="https://drive.google.com/file/d/1MhL4jDibYF79vLd7Dm_1SuRnT12zpLuW/view?usp=sharing" target="_blank" rel="noopener noreferrer">Watch the v1 Architecture Walkthrough (13 min) on Google Drive</a></b></em>
-</p>
-
-> **Note:** The video above walks through the **v1** core 5-agent LangGraph design, hybrid ChromaDB RAG, and visual execution tree. Following technical review, the repository was upgraded to **v2** with JWT/RBAC, PCI-DSS telemetry sanitization, Ragas Evals + CI gate, SQLite persistence, and real LangGraph `interrupt()` HITL resumption.
-
----
-
 ## 1. Architecture Overview & Multi-Agent Workflow
 
 The system implements a deterministic, fully observable **5-Agent LangGraph (`StateGraph`) Orchestration** behind an authenticated FastAPI gateway and bidirectional security guardrails:
