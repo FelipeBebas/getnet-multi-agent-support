@@ -9,7 +9,9 @@
 [![Tests Passing](https://img.shields.io/badge/Tests-117%2F117%20PASS-brightgreen.svg)](tests/)
 [![Challenge Benchmark](https://img.shields.io/badge/Challenge%20Scenarios-10%2F10%20(100%25)-success.svg)](scripts/evaluate.py)
 
-Fintech production-hardened, **Spec-Driven Multi-Agent Support System** engineered for Getnet acquiring & merchant operations. Built with **Python 3.12**, **FastAPI**, **LangGraph** (`interrupt()` + `SqliteSaver`), **ChromaDB**, **Ragas**, **LangSmith**, and **OpenSpec**.
+Fintech production-hardened, **Spec-Driven Multi-Agent Support System** engineered for acquiring & merchant operations. Built with **Python 3.12**, **FastAPI**, **LangGraph** (`interrupt()` + `SqliteSaver`), **ChromaDB**, **Ragas**, **LangSmith**, and **OpenSpec**.
+
+> **Disclaimer:** Independent open-source reference architecture for multi-agent fintech/acquiring support workflows; not officially affiliated with Getnet or Santander.
 
 ---
 
@@ -24,6 +26,36 @@ Fintech production-hardened, **Spec-Driven Multi-Agent Support System** engineer
 | **Quantitative RAG Evaluation & CI Gate** | **Ragas** metrics (`faithfulness`, `answer_relevancy`, `context_precision`, `context_recall`, `hallucination_rate`) with offline deterministic CI fallback and `--enforce-thresholds` | [`scripts/evaluate.py`](scripts/evaluate.py), [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
 | **Real Human-in-the-Loop (HITL) & Persistence** | LangGraph `interrupt()` suspension + `Command(resume=...)` over `SqliteSaver`, SQLite-backed session history, runtime CRM tickets, and `/dashboard` HITL Review Queue | [`src/orchestration/graph.py`](src/orchestration/graph.py), [`src/orchestration/persistence.py`](src/orchestration/persistence.py) |
 | **Container Security** | Non-root `appuser` execution, test/dev files excluded from image, `no-new-privileges`, and persistent runtime/log volumes | [`Dockerfile`](Dockerfile), [`docker-compose.yml`](docker-compose.yml) |
+
+---
+
+## Visual Showcase (v2 Production Hardening)
+
+<table>
+  <tr>
+    <td width="40%" align="center" valign="top">
+      <strong>1. RBAC Operator Sign-In Gate (<code>401</code> / <code>HttpOnly</code> Cookie)</strong><br/><br/>
+      <img src="docs/assets/01-rbac-login.png" alt="RBAC Operator Sign-In Console" width="260" />
+    </td>
+    <td width="60%" align="center" valign="middle">
+      <strong>4. Automated Ragas Evaluation &amp; CI Quality Gate</strong><br/><br/>
+      <img src="docs/assets/04-tests-ragas-scorecard.png" alt="Ragas Evaluation Report and Scorecard" width="520" />
+    </td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <strong>2. Live LangGraph Tree Execution &amp; Grounded RAG Result</strong><br/><br/>
+      <img src="docs/assets/02-langgraph-tree-slo.png" alt="Live LangGraph Tree Execution and Grounded RAG Result" width="420" />
+    </td>
+    <td width="50%" align="center" valign="top">
+      <strong>3. Real HITL Pause (<code>interrupt()</code> / <code>pending_human_review</code>)</strong><br/><br/>
+      <img src="docs/assets/03a-hitl-pending.png" alt="LangGraph HITL Pause with Pending Human Review" width="420" />
+    </td>
+  </tr>
+</table>
 
 ---
 
